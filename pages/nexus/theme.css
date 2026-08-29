@@ -1,0 +1,317 @@
+/* ---------------------------------------------------------------------------
+ * 自动生成，请勿手工编辑。
+ * 来源: astrbot_plugin_bangumi_nexus/nexus/render/themes.py
+ * 重建: python astrbot_plugin_bangumi_nexus/scripts/build_theme_css.py
+ *
+ * 每个主题都暴露与卡片渲染器完全相同的 28 个自定义属性，
+ * 外加若干只对 WebUI 有意义的派生变量（滚动条、玻璃模糊、语义色等）。
+ * ------------------------------------------------------------------------- */
+
+
+/* app.js 还没启动时的兜底，避免首屏白闪。 */
+
+:root {
+  --canvas: radial-gradient(1200px 620px at 12% -8%, rgba(77, 226, 255, 0.20), transparent 62%), radial-gradient(1000px 640px at 92% 4%, rgba(176, 107, 255, 0.22), transparent 60%), linear-gradient(168deg, #070a16 0%, #0c1226 52%, #111a33 100%);
+  --canvas-from: #070a16;
+  --canvas-mid: #0c1226;
+  --canvas-to: #111a33;
+  --surface: rgba(20, 27, 48, 0.902);
+  --surface-alt: #1b2440;
+  --surface-css: linear-gradient(160deg, rgba(28, 38, 66, 0.92), rgba(16, 22, 41, 0.94));
+  --hero: linear-gradient(115deg, rgba(77, 226, 255, 0.16), rgba(176, 107, 255, 0.16));
+  --overlay: repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 4px);
+  --border: #27314f;
+  --border-strong: #3a4670;
+  --text: #e9eefb;
+  --muted: #93a0c2;
+  --faint: #66718f;
+  --accent: #4de2ff;
+  --accent-alt: #b06bff;
+  --accent-ink: #04121c;
+  --chip: rgba(77, 226, 255, 0.149);
+  --chip-text: #9ce9ff;
+  --code: #0a1122;
+  --code-text: #8fd8ff;
+  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-heading: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "Sarasa Mono SC", Consolas, "DejaVu Sans Mono", ui-monospace, monospace;
+  --radius: 22px;
+  --shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.55);
+  --accent-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.5);
+  --heading-spacing: -0.01em;
+  --mode: dark;
+  --glass-blur: 10px;
+  --rail: #070a16;
+  --track: rgba(255, 255, 255, 0.10);
+  --hairline: rgba(255, 255, 255, 0.06);
+  --lift: rgba(255, 255, 255, 0.05);
+  --sunken: rgba(0, 0, 0, 0.28);
+  --danger: #ff7a86;
+  --success: #54e3ae;
+  --warn: #ffc46b;
+  color-scheme: dark;
+}
+
+/* 午夜霓虹 - 深藏青底色 · 青紫霓虹描边 */
+
+[data-nexus-theme="midnight"] {
+  --canvas: radial-gradient(1200px 620px at 12% -8%, rgba(77, 226, 255, 0.20), transparent 62%), radial-gradient(1000px 640px at 92% 4%, rgba(176, 107, 255, 0.22), transparent 60%), linear-gradient(168deg, #070a16 0%, #0c1226 52%, #111a33 100%);
+  --canvas-from: #070a16;
+  --canvas-mid: #0c1226;
+  --canvas-to: #111a33;
+  --surface: rgba(20, 27, 48, 0.902);
+  --surface-alt: #1b2440;
+  --surface-css: linear-gradient(160deg, rgba(28, 38, 66, 0.92), rgba(16, 22, 41, 0.94));
+  --hero: linear-gradient(115deg, rgba(77, 226, 255, 0.16), rgba(176, 107, 255, 0.16));
+  --overlay: repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 4px);
+  --border: #27314f;
+  --border-strong: #3a4670;
+  --text: #e9eefb;
+  --muted: #93a0c2;
+  --faint: #66718f;
+  --accent: #4de2ff;
+  --accent-alt: #b06bff;
+  --accent-ink: #04121c;
+  --chip: rgba(77, 226, 255, 0.149);
+  --chip-text: #9ce9ff;
+  --code: #0a1122;
+  --code-text: #8fd8ff;
+  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-heading: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "Sarasa Mono SC", Consolas, "DejaVu Sans Mono", ui-monospace, monospace;
+  --radius: 22px;
+  --shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.55);
+  --accent-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.5);
+  --heading-spacing: -0.01em;
+  --mode: dark;
+  --glass-blur: 10px;
+  --rail: #070a16;
+  --track: rgba(255, 255, 255, 0.10);
+  --hairline: rgba(255, 255, 255, 0.06);
+  --lift: rgba(255, 255, 255, 0.05);
+  --sunken: rgba(0, 0, 0, 0.28);
+  --danger: #ff7a86;
+  --success: #54e3ae;
+  --warn: #ffc46b;
+  color-scheme: dark;
+}
+
+/* 极光 - 半透明玻璃层 · 薄荷与蓝的流光 */
+
+[data-nexus-theme="aurora"] {
+  --canvas: radial-gradient(900px 520px at 8% 0%, rgba(99, 255, 201, 0.26), transparent 60%), radial-gradient(880px 560px at 78% 6%, rgba(127, 169, 255, 0.28), transparent 58%), radial-gradient(760px 620px at 50% 108%, rgba(186, 128, 255, 0.20), transparent 62%), linear-gradient(170deg, #04191c 0%, #08243c 48%, #161244 100%);
+  --canvas-from: #04191c;
+  --canvas-mid: #08243c;
+  --canvas-to: #161244;
+  --surface: rgba(255, 255, 255, 0.071);
+  --surface-alt: rgba(255, 255, 255, 0.110);
+  --surface-css: linear-gradient(155deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.045));
+  --hero: linear-gradient(118deg, rgba(99, 255, 201, 0.18), rgba(127, 169, 255, 0.14));
+  --overlay: none;
+  --border: rgba(255, 255, 255, 0.149);
+  --border-strong: rgba(255, 255, 255, 0.239);
+  --text: #eafff8;
+  --muted: #a2c6c2;
+  --faint: #7d9c9c;
+  --accent: #63ffc9;
+  --accent-alt: #7fa9ff;
+  --accent-ink: #052018;
+  --chip: rgba(99, 255, 201, 0.141);
+  --chip-text: #bdffe8;
+  --code: rgba(4, 18, 26, 0.600);
+  --code-text: #a6f2de;
+  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-heading: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "Sarasa Mono SC", Consolas, "DejaVu Sans Mono", ui-monospace, monospace;
+  --radius: 26px;
+  --shadow: 0 30px 70px -34px rgba(0, 20, 24, 0.75);
+  --accent-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.5);
+  --heading-spacing: -0.01em;
+  --mode: dark;
+  --glass-blur: 20px;
+  --rail: #04191c;
+  --track: rgba(255, 255, 255, 0.10);
+  --hairline: rgba(255, 255, 255, 0.06);
+  --lift: rgba(255, 255, 255, 0.05);
+  --sunken: rgba(0, 0, 0, 0.28);
+  --danger: #ff7a86;
+  --success: #54e3ae;
+  --warn: #ffc46b;
+  color-scheme: dark;
+}
+
+/* 樱绯 - 暖粉纸感 · 衬线标题的柔和秩序 */
+
+[data-nexus-theme="sakura"] {
+  --canvas: radial-gradient(900px 480px at 14% -6%, rgba(228, 84, 125, 0.14), transparent 60%), radial-gradient(820px 520px at 88% 2%, rgba(255, 171, 134, 0.20), transparent 58%), linear-gradient(172deg, #fff8f9 0%, #ffeef3 55%, #fdf3ec 100%);
+  --canvas-from: #fff8f9;
+  --canvas-mid: #ffeef3;
+  --canvas-to: #fdf3ec;
+  --surface: #ffffff;
+  --surface-alt: #fff5f7;
+  --surface-css: linear-gradient(158deg, #ffffff, #fff7f9);
+  --hero: linear-gradient(116deg, rgba(228, 84, 125, 0.12), rgba(255, 171, 134, 0.18));
+  --overlay: none;
+  --border: #f6dae1;
+  --border-strong: #efc2ce;
+  --text: #3d2b31;
+  --muted: #8d6c76;
+  --faint: #b39aa2;
+  --accent: #e4547d;
+  --accent-alt: #ffab86;
+  --accent-ink: #ffffff;
+  --chip: rgba(228, 84, 125, 0.122);
+  --chip-text: #b83f63;
+  --code: #fff1f4;
+  --code-text: #a44366;
+  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-heading: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "Sarasa Mono SC", Consolas, "DejaVu Sans Mono", ui-monospace, monospace;
+  --radius: 20px;
+  --shadow: 0 22px 50px -30px rgba(180, 108, 128, 0.45);
+  --accent-shadow: 0 10px 26px -12px rgba(228, 84, 125, 0.45);
+  --heading-spacing: 0.005em;
+  --mode: light;
+  --glass-blur: 10px;
+  --rail: #fff5f7;
+  --track: rgba(15, 23, 42, 0.10);
+  --hairline: rgba(15, 23, 42, 0.05);
+  --lift: rgba(255, 255, 255, 0.72);
+  --sunken: rgba(15, 23, 42, 0.045);
+  --danger: #d02c46;
+  --success: #12855f;
+  --warn: #a35c05;
+  color-scheme: light;
+}
+
+/* 蓝图 - 工程网格 · 等宽标注的技术感 */
+
+[data-nexus-theme="blueprint"] {
+  --canvas: linear-gradient(168deg, #062138 0%, #082a46 55%, #04182a 100%);
+  --canvas-from: #062138;
+  --canvas-mid: #082a46;
+  --canvas-to: #04182a;
+  --surface: rgba(255, 255, 255, 0.051);
+  --surface-alt: rgba(255, 255, 255, 0.086);
+  --surface-css: linear-gradient(150deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.035));
+  --hero: linear-gradient(118deg, rgba(255, 209, 102, 0.14), rgba(110, 200, 255, 0.14));
+  --overlay: linear-gradient(rgba(146, 200, 255, 0.075) 1px, transparent 1px) 0 0 / 100% 34px, linear-gradient(90deg, rgba(146, 200, 255, 0.075) 1px, transparent 1px) 0 0 / 34px 100%;
+  --border: rgba(127, 196, 255, 0.239);
+  --border-strong: rgba(127, 196, 255, 0.361);
+  --text: #dcecfb;
+  --muted: #93b7d6;
+  --faint: #6d90ae;
+  --accent: #ffd166;
+  --accent-alt: #6ec8ff;
+  --accent-ink: #0a1a28;
+  --chip: rgba(255, 209, 102, 0.122);
+  --chip-text: #ffe3a3;
+  --code: rgba(3, 18, 31, 0.600);
+  --code-text: #8fd0ff;
+  --font-body: "JetBrains Mono", "Cascadia Code", "SF Mono", "Sarasa Mono SC", Consolas, "DejaVu Sans Mono", ui-monospace, monospace;
+  --font-heading: "JetBrains Mono", "Cascadia Code", "SF Mono", "Sarasa Mono SC", Consolas, "DejaVu Sans Mono", ui-monospace, monospace;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "Sarasa Mono SC", Consolas, "DejaVu Sans Mono", ui-monospace, monospace;
+  --radius: 8px;
+  --shadow: 0 20px 46px -28px rgba(0, 12, 24, 0.8);
+  --accent-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.5);
+  --heading-spacing: 0.04em;
+  --mode: dark;
+  --glass-blur: 10px;
+  --rail: #062138;
+  --track: rgba(255, 255, 255, 0.10);
+  --hairline: rgba(255, 255, 255, 0.06);
+  --lift: rgba(255, 255, 255, 0.05);
+  --sunken: rgba(0, 0, 0, 0.28);
+  --danger: #ff7a86;
+  --success: #54e3ae;
+  --warn: #ffc46b;
+  color-scheme: dark;
+}
+
+/* 素笺 - 米白纸张 · 墨黑与朱红的编排 */
+
+[data-nexus-theme="paper"] {
+  --canvas: radial-gradient(1000px 520px at 50% -12%, rgba(255, 255, 255, 0.9), transparent 60%), linear-gradient(174deg, #f7f4ed 0%, #f2eee4 58%, #eae5d8 100%);
+  --canvas-from: #f7f4ed;
+  --canvas-mid: #f2eee4;
+  --canvas-to: #eae5d8;
+  --surface: #fffdf8;
+  --surface-alt: #f7f3e9;
+  --surface-css: linear-gradient(160deg, #fffdf8, #faf7ee);
+  --hero: linear-gradient(120deg, rgba(176, 64, 44, 0.10), rgba(47, 72, 88, 0.08));
+  --overlay: none;
+  --border: #ded7c6;
+  --border-strong: #c8bfa9;
+  --text: #221f1a;
+  --muted: #726b5d;
+  --faint: #9c9484;
+  --accent: #b0402c;
+  --accent-alt: #2f4858;
+  --accent-ink: #fffdf8;
+  --chip: rgba(176, 64, 44, 0.102);
+  --chip-text: #8f3323;
+  --code: #f2eee2;
+  --code-text: #4a4438;
+  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-heading: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "Sarasa Mono SC", Consolas, "DejaVu Sans Mono", ui-monospace, monospace;
+  --radius: 6px;
+  --shadow: 0 18px 40px -28px rgba(80, 70, 50, 0.4);
+  --accent-shadow: 0 8px 22px -12px rgba(176, 64, 44, 0.38);
+  --heading-spacing: 0.01em;
+  --mode: light;
+  --glass-blur: 10px;
+  --rail: #f7f3e9;
+  --track: rgba(15, 23, 42, 0.10);
+  --hairline: rgba(15, 23, 42, 0.05);
+  --lift: rgba(255, 255, 255, 0.72);
+  --sunken: rgba(15, 23, 42, 0.045);
+  --danger: #d02c46;
+  --success: #12855f;
+  --warn: #a35c05;
+  color-scheme: light;
+}
+
+/* 落日 - 炭灰暖底 · 珊瑚与琥珀的渐层 */
+
+[data-nexus-theme="sunset"] {
+  --canvas: radial-gradient(1000px 560px at 88% -10%, rgba(255, 138, 92, 0.30), transparent 62%), radial-gradient(900px 520px at 6% 8%, rgba(255, 196, 107, 0.18), transparent 58%), linear-gradient(166deg, #1d1219 0%, #2c1a24 52%, #3a2028 100%);
+  --canvas-from: #1d1219;
+  --canvas-mid: #2c1a24;
+  --canvas-to: #3a2028;
+  --surface: rgba(42, 28, 36, 0.902);
+  --surface-alt: #35232c;
+  --surface-css: linear-gradient(158deg, rgba(60, 40, 50, 0.94), rgba(36, 24, 31, 0.94));
+  --hero: linear-gradient(116deg, rgba(255, 138, 92, 0.20), rgba(255, 196, 107, 0.16));
+  --overlay: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 3px);
+  --border: #4a3038;
+  --border-strong: #6a434c;
+  --text: #fdeee6;
+  --muted: #c8a49c;
+  --faint: #9d7d78;
+  --accent: #ff8a5c;
+  --accent-alt: #ffc46b;
+  --accent-ink: #2a1109;
+  --chip: rgba(255, 138, 92, 0.141);
+  --chip-text: #ffc4a8;
+  --code: #1a1013;
+  --code-text: #ffb894;
+  --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-heading: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", "Sarasa Mono SC", Consolas, "DejaVu Sans Mono", ui-monospace, monospace;
+  --radius: 18px;
+  --shadow: 0 26px 60px -32px rgba(24, 8, 12, 0.8);
+  --accent-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.5);
+  --heading-spacing: -0.01em;
+  --mode: dark;
+  --glass-blur: 10px;
+  --rail: #1d1219;
+  --track: rgba(255, 255, 255, 0.10);
+  --hairline: rgba(255, 255, 255, 0.06);
+  --lift: rgba(255, 255, 255, 0.05);
+  --sunken: rgba(0, 0, 0, 0.28);
+  --danger: #ff7a86;
+  --success: #54e3ae;
+  --warn: #ffc46b;
+  color-scheme: dark;
+}

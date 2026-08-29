@@ -1,0 +1,254 @@
+{
+  "metadata": {
+    "display_name": "Bangumi Nexus",
+    "short_desc": "An all-in-one anime companion: 41 chat commands plus a dashboard page for search, watchlists, feeds, broadcasts and gacha.",
+    "desc": "Bangumi Nexus merges Bangumi, bangumi-data, anime1.me, Nagato Bandou, AGE, Moegirlpedia, Mikan and RSSHub into one cross-source anime index: subject search and the daily calendar, season tables, watchlists with progress tracking, RSS and Mikan subscriptions, a scheduled new-episode broadcast that the AstrBot persona can narrate, random gacha picks and AutoBangumi webhook intake - all rendered with six polished card themes and managed from a dashboard page."
+  },
+  "config": {
+    "card_theme": {
+      "description": "Default card theme",
+      "hint": "Every card (calendar / subject / watchlist / update / gacha / help) shares this palette. You can also switch it per chat with the theme argument of the help command.",
+      "labels": [
+        "Midnight",
+        "Aurora",
+        "Sakura",
+        "Blueprint",
+        "Paper",
+        "Sunset"
+      ]
+    },
+    "card_renderer": {
+      "description": "Card renderer",
+      "hint": "auto = headless browser -> Pillow -> AstrBot text-to-image -> plain text, falling back step by step. Pick text to always reply with plain text.",
+      "labels": [
+        "auto - fall back step by step (recommended)",
+        "html - headless browser",
+        "raster - draw locally with Pillow",
+        "t2i - AstrBot text-to-image",
+        "text - plain text only"
+      ]
+    },
+    "card_width": {
+      "description": "Card width (pixels)",
+      "hint": "760-1200. Too narrow feels cramped, too wide needs zooming on phones."
+    },
+    "bangumi_access_token": {
+      "description": "Bangumi access token",
+      "hint": "Optional: read-only endpoints work without it. Generating one at https://next.bgm.tv/demo/access-token raises your quota and reduces 429 errors."
+    },
+    "user_agent": {
+      "description": "Custom User-Agent",
+      "hint": "Leave empty to use the built-in UA. Bangumi asks every client to identify itself in the UA."
+    },
+    "proxy": {
+      "description": "HTTP / SOCKS proxy",
+      "hint": "Such as http://127.0.0.1:7890 or socks5://127.0.0.1:1080. Empty means direct connection."
+    },
+    "http_timeout_seconds": {
+      "description": "Request timeout (seconds)"
+    },
+    "http_max_retries": {
+      "description": "Request retry count",
+      "hint": "Exponential backoff, applied only to timeouts, 5xx and 429."
+    },
+    "cache_ttl_minutes": {
+      "description": "Source cache lifetime (minutes)",
+      "hint": "In-memory cache for slow-changing data such as the calendar, season tables and anime lists. 0 disables caching."
+    },
+    "max_concurrency": {
+      "description": "Maximum concurrent requests",
+      "hint": "How many requests may run at once while fetching covers or batching subject lookups. Too high invites rate limiting."
+    },
+    "search_max_results": {
+      "description": "Maximum search results"
+    },
+    "enable_cross_match": {
+      "description": "Enable cross-source aggregation",
+      "hint": "When on, one card shows the Bangumi score, air time, anime1 watch link, staff and cast from Nagato Bandou, plus the Mikan RSS URL. Turn it off to query Bangumi only, which is faster."
+    },
+    "translate_summary": {
+      "description": "Auto-translate Japanese summaries",
+      "hint": "Uses the LLM provider already configured in AstrBot, so it consumes tokens."
+    },
+    "translate_provider_id": {
+      "description": "LLM provider used for translation",
+      "hint": "Leave empty to use whatever provider the current session is on."
+    },
+    "long_reply_as_card": {
+      "description": "Turn long replies into cards",
+      "hint": "Replies longer than 200 characters or containing several lines are sent as an image instead, to avoid flooding the chat."
+    },
+    "push_enabled": {
+      "description": "Enable the daily broadcast",
+      "hint": "Pushes the today-on-air card to the target sessions below on a schedule."
+    },
+    "push_time": {
+      "description": "Daily broadcast time",
+      "hint": "24-hour HH:MM. Use commas for several slots, for example 08:30,20:00. Interpreted in the bot host's local timezone."
+    },
+    "push_targets": {
+      "description": "Broadcast targets (UMO)",
+      "hint": "Full unified message origins, such as aiocqhttp:GroupMessage:123456. A group can also subscribe itself by sending the calendar-subscribe command."
+    },
+    "push_max_items": {
+      "description": "Maximum shows per broadcast card"
+    },
+    "push_sort_by": {
+      "description": "Broadcast sort key",
+      "labels": [
+        "Bangumi score",
+        "People watching",
+        "Air time",
+        "Title"
+      ]
+    },
+    "push_sort_order": {
+      "description": "Broadcast sort order",
+      "labels": [
+        "Descending (highest first)",
+        "Ascending (lowest first)"
+      ]
+    },
+    "push_min_score": {
+      "description": "Minimum score for the broadcast",
+      "hint": "Shows rated below this are skipped; 0 disables the filter. Brand-new shows often have no rating yet, so a high value hides them."
+    },
+    "push_min_doing": {
+      "description": "Minimum watchers for the broadcast",
+      "hint": "0 disables the filter."
+    },
+    "persona_reply_enabled": {
+      "description": "Let the AstrBot persona narrate notifications",
+      "hint": "When on, daily broadcasts, RSS updates and Webhook notifications first get one line in the voice of the active persona, sent together with the card. The plugin only supplies the task instruction; the persona itself comes from AstrBot."
+    },
+    "persona_id": {
+      "description": "Persona used for narration",
+      "hint": "Which persona should narrate the notifications. Leave empty to follow the target session's default persona; when neither resolves, only the card is sent."
+    },
+    "persona_provider_id": {
+      "description": "LLM provider used for narration",
+      "hint": "Leave empty to use the provider the target session is currently on. If none resolves, narration is skipped and only the card is sent."
+    },
+    "persona_instruction": {
+      "description": "Narration task instruction",
+      "hint": "Describe only what to do. Do not define a character here - tone and personality come from the AstrBot persona settings."
+    },
+    "persona_max_chars": {
+      "description": "Maximum narration length",
+      "hint": "Longer output is truncated so the persona cannot push the card out of view."
+    },
+    "rss_enabled": {
+      "description": "Enable RSS polling"
+    },
+    "rss_interval_minutes": {
+      "description": "RSS polling interval (minutes)",
+      "hint": "Minimum 5. Neither Mikan nor RSSHub enjoys being hammered; 15-30 minutes is plenty."
+    },
+    "rss_max_items_per_poll": {
+      "description": "Maximum items pushed per feed per poll",
+      "hint": "Keeps a feed that suddenly returns dozens of items from flooding the chat; the rest is recorded but not pushed."
+    },
+    "rss_first_poll_silent": {
+      "description": "Skip history on a feed's first poll",
+      "hint": "Strongly recommended: otherwise a fresh subscription replays its whole backlog immediately."
+    },
+    "rss_history_days": {
+      "description": "Days to keep deduplication records"
+    },
+    "rsshub_base": {
+      "description": "RSSHub instance URL",
+      "hint": "Used to expand /rsshub routes into full URLs. A self-hosted instance is more reliable."
+    },
+    "mikan_base": {
+      "description": "Mikan Project URL",
+      "hint": "Used to build per-show RSS feeds. Switch to a mirror domain if the main site is slow for you."
+    },
+    "webhook_enabled": {
+      "description": "Accept AutoBangumi webhooks",
+      "hint": "Exposes an HTTP endpoint so downloaders such as AutoBangumi can push events like episode-downloaded."
+    },
+    "webhook_path": {
+      "description": "Webhook path",
+      "hint": "The full URL becomes http(s)://<your-astrbot>/api/<this path>."
+    },
+    "webhook_token": {
+      "description": "Webhook verification token",
+      "hint": "Empty means no verification, which is not recommended. Once set, requests must carry a matching X-Webhook-Token header."
+    },
+    "webhook_notify_watchers": {
+      "description": "Notify only sessions tracking the show",
+      "hint": "Besides the fixed targets, sessions whose watchlist contains the show also get notified. Handy when one downloader serves several groups without cross-flooding them."
+    },
+    "webhook_auto_progress": {
+      "description": "Advance watch progress on new episodes",
+      "hint": "When a download-complete or import event arrives, move the matching watchlist entry to that episode. It only moves forward, never back."
+    },
+    "webhook_port": {
+      "description": "Standalone webhook port",
+      "hint": "0 keeps it off, meaning only the AstrBot dashboard route /api/plug/ is used and a logged-in dashboard session is required. Setting 1-65535 starts a tiny extra HTTP server dedicated to webhooks so AutoBangumi can reach it directly; a webhook token is mandatory in that case, otherwise the listener refuses to start."
+    },
+    "webhook_bind": {
+      "description": "Webhook bind address",
+      "hint": "The interface the standalone listener binds to. Use 127.0.0.1 when the downloader runs on the same machine so nothing else can reach it."
+    },
+    "dedup_window_seconds": {
+      "description": "Notification deduplication window (seconds)",
+      "hint": "The same notification arriving twice inside the window is sent only once."
+    },
+    "anime1_enabled": {
+      "description": "Enable the anime1.me watch index",
+      "hint": "Provides watch links and the anime list. That site is a third-party aggregator; links are indexed only."
+    },
+    "anime1_refresh_hours": {
+      "description": "anime1 refresh hours",
+      "hint": "Whole hours separated by commas, for example 1,13,22. Empty disables automatic refresh."
+    },
+    "default_platform_id": {
+      "description": "Default platform adapter ID",
+      "hint": "Used to build a full unified message origin when a webhook target only carries a user or group ID."
+    },
+    "send_max_retries": {
+      "description": "Delivery retry count"
+    },
+    "send_retry_delay_seconds": {
+      "description": "Base delivery retry delay (seconds)",
+      "hint": "Exponential backoff: attempt N waits delay x 2^(N-1)."
+    },
+    "send_concurrency": {
+      "description": "Maximum concurrent deliveries",
+      "hint": "How many sessions receive a message at the same time. Too high can trip platform rate limits."
+    },
+    "gacha_source": {
+      "description": "Gacha data source",
+      "hint": "yuc = Nagato Bandou season table with staff, cast and genres; bangumi = the Bangumi daily calendar; auto = try yuc first and fall back to Bangumi.",
+      "labels": [
+        "auto - yuc first, Bangumi as fallback",
+        "yuc - Nagato Bandou season table",
+        "bangumi - Bangumi daily calendar"
+      ]
+    },
+    "webui_enabled": {
+      "description": "Enable the dashboard page",
+      "hint": "When off no web route is registered at all; chat commands keep working."
+    },
+    "webui_theme": {
+      "description": "Default WebUI theme",
+      "hint": "Used the first time the page opens; after that the theme picked in the page wins.",
+      "labels": [
+        "Midnight",
+        "Aurora",
+        "Sakura",
+        "Blueprint",
+        "Paper",
+        "Sunset"
+      ]
+    }
+  },
+  "pages": {
+    "nexus": {
+      "title": "Bangumi Nexus",
+      "desc": "Search, watchlists, RSS feeds, daily broadcasts and card previews in one panel.",
+      "description": "Search, watchlists, RSS feeds, daily broadcasts and card previews in one panel."
+    }
+  }
+}

@@ -1,0 +1,49 @@
+# Lint configuration for astrbot_plugin_bangumi_nexus.
+#
+# Mirrors the rule set used across this author's AstrBot plugins: fairly wide,
+# minus the checks that fight the plugin architecture (broad "never crash the
+# bot" excepts, full-width punctuation in Chinese copy, ...).
+
+target-version = "py310"
+line-length = 100
+extend-exclude = ["data", "assets", "__pycache__", "_refs"]
+
+[lint]
+select = [
+    "E",      # pycodestyle
+    "W",
+    "F",      # pyflakes
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # bugbear
+    "C4",     # comprehensions
+    "SIM",    # simplify
+    "RET",    # return
+    "PTH",    # pathlib
+    "PIE",
+    "RUF",
+    "ASYNC",
+    "A",      # builtin shadowing
+    "BLE",    # blind except — 允许，但必须写明理由（noqa: BLE001）
+]
+ignore = [
+    "E501",    # long CJK strings in help text are fine
+    "SIM105",  # contextlib.suppress hides which call may fail
+    "SIM115",
+    "RUF001",  # full-width punctuation is intentional in Chinese copy
+    "RUF002",
+    "RUF003",
+    "RET504",  # a named result is often clearer than an inline return
+    "B008",
+    "A003",
+    "A004",    # astrbot.api.event.filter is the framework's public name
+    "ASYNC240", # AstrBot runs on asyncio, not trio/anyio
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["S101", "PLR2004"]
+"scripts/*" = ["E402", "T201"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

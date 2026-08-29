@@ -1,0 +1,254 @@
+{
+  "metadata": {
+    "display_name": "番剧中枢",
+    "short_desc": "41 条指令 + Dashboard 面板的一站式番剧助手：查番、追番、订阅、播报、抽番。",
+    "desc": "把 Bangumi、bangumi-data、anime1.me、长门番堂、AGE 动漫、萌娘百科、Mikan 与 RSSHub 汇成一份跨源番剧索引：条目搜索与每日放送、季度新番表、追番清单与进度、RSS / Mikan 订阅推送、每日新番播报（可走 AstrBot 人格转述）、随机抽番与 AutoBangumi Webhook 接入，全部配六套高级卡片主题与 Dashboard 管理页。"
+  },
+  "config": {
+    "card_theme": {
+      "description": "卡片默认主题",
+      "hint": "所有卡片（日历 / 条目 / 追番 / 更新 / 抽番 / 帮助）共用这套配色，聊天里也能用「番剧主题 樱绯」临时切换。",
+      "labels": [
+        "午夜霓虹 Midnight",
+        "极光 Aurora",
+        "樱绯 Sakura",
+        "蓝图 Blueprint",
+        "素笺 Paper",
+        "落日 Sunset"
+      ]
+    },
+    "card_renderer": {
+      "description": "卡片渲染方式",
+      "hint": "auto = AstrBot 无头浏览器 → Pillow 本地绘制 → t2i 文字转图 → 纯文本，逐级兜底；选 text 表示永远只发文字。",
+      "labels": [
+        "auto 逐级兜底（推荐）",
+        "html 无头浏览器渲染",
+        "raster Pillow 本地绘制",
+        "t2i AstrBot 文字转图",
+        "text 只发纯文本"
+      ]
+    },
+    "card_width": {
+      "description": "卡片渲染宽度（像素）",
+      "hint": "760~1200。太窄会挤，太宽在手机上要缩放。"
+    },
+    "bangumi_access_token": {
+      "description": "Bangumi Access Token",
+      "hint": "留空也能用（只读接口不强制）。在 https://next.bgm.tv/demo/access-token 生成后填入可提高配额、减少 429。"
+    },
+    "user_agent": {
+      "description": "自定义 User-Agent",
+      "hint": "留空使用插件内置 UA。Bangumi 官方要求 UA 里带上应用标识。"
+    },
+    "proxy": {
+      "description": "HTTP / SOCKS 代理",
+      "hint": "形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080。留空表示直连。"
+    },
+    "http_timeout_seconds": {
+      "description": "单次网络请求超时（秒）"
+    },
+    "http_max_retries": {
+      "description": "网络请求重试次数",
+      "hint": "指数退避重试，只对超时 / 5xx / 429 生效。"
+    },
+    "cache_ttl_minutes": {
+      "description": "数据源缓存时长（分钟）",
+      "hint": "日历、季度表、番剧列表等慢变数据的内存缓存时长，0 表示不缓存。"
+    },
+    "max_concurrency": {
+      "description": "并发请求上限",
+      "hint": "抓封面、批量查条目时同时最多几个请求，调太高容易被限流。"
+    },
+    "search_max_results": {
+      "description": "搜索最多返回条数"
+    },
+    "enable_cross_match": {
+      "description": "启用跨源信息聚合",
+      "hint": "开启后一张卡里同时给出 Bangumi 评分、放送时间、anime1 在线观看、長門番堂 制作组与声优、Mikan RSS 地址。关闭则只查 Bangumi，更快。"
+    },
+    "translate_summary": {
+      "description": "日文简介自动翻译成中文",
+      "hint": "借用 AstrBot 已配置的 LLM 供应商翻译，会消耗 token。"
+    },
+    "translate_provider_id": {
+      "description": "翻译使用的 LLM 供应商",
+      "hint": "留空则使用当前会话正在用的供应商。"
+    },
+    "long_reply_as_card": {
+      "description": "长文本回复自动转成卡片",
+      "hint": "超过 200 字或含多行的回复改用图片发送，避免刷屏。"
+    },
+    "push_enabled": {
+      "description": "启用每日新番播报",
+      "hint": "每天定时把「今日放送」卡片推给下面配置的目标会话。"
+    },
+    "push_time": {
+      "description": "每日播报时间",
+      "hint": "24 小时制 HH:MM，可用英文逗号写多个时间点，例如 08:30,20:00。按 Bot 所在机器的本地时区。"
+    },
+    "push_targets": {
+      "description": "播报目标会话（UMO）",
+      "hint": "填写完整会话标识，形如 aiocqhttp:GroupMessage:123456。也可以直接在群里发「日历订阅 开」让本群自助订阅。"
+    },
+    "push_max_items": {
+      "description": "播报卡片最多列出的番剧数"
+    },
+    "push_sort_by": {
+      "description": "播报排序依据",
+      "labels": [
+        "按 Bangumi 评分",
+        "按在看人数",
+        "按放送时间",
+        "按名称"
+      ]
+    },
+    "push_sort_order": {
+      "description": "播报排序方向",
+      "labels": [
+        "降序（高的在前）",
+        "升序（低的在前）"
+      ]
+    },
+    "push_min_score": {
+      "description": "播报评分下限",
+      "hint": "低于该评分的番剧不进播报；0 表示不过滤。新番前期常常没有评分，设太高会漏。"
+    },
+    "push_min_doing": {
+      "description": "播报在看人数下限",
+      "hint": "0 表示不过滤。"
+    },
+    "persona_reply_enabled": {
+      "description": "通知走 AstrBot 人格转述",
+      "hint": "开启后新番播报 / RSS 更新 / Webhook 通知会先让当前人格用自己的口吻说一句，再附上卡片一起发送。插件只提供任务指令，人格由 AstrBot 自身配置决定。"
+    },
+    "persona_id": {
+      "description": "转述用的人格",
+      "hint": "指定用哪个人格转述新番通知。留空则跟随目标会话当前的默认人格；两者都取不到时只发卡片。"
+    },
+    "persona_provider_id": {
+      "description": "人格转述使用的 LLM 供应商",
+      "hint": "留空则使用目标会话当前正在用的供应商；取不到时自动跳过转述、只发卡片。"
+    },
+    "persona_instruction": {
+      "description": "人格转述任务指令",
+      "hint": "只写「要做什么」，不要在这里定义人格 —— 语气与人设由 AstrBot 的人格设置决定。"
+    },
+    "persona_max_chars": {
+      "description": "人格转述最长字数",
+      "hint": "超出会截断，防止人格发挥过头把卡片挤到看不见。"
+    },
+    "rss_enabled": {
+      "description": "启用 RSS 订阅轮询"
+    },
+    "rss_interval_minutes": {
+      "description": "RSS 轮询间隔（分钟）",
+      "hint": "最小 5 分钟。Mikan / RSSHub 都不喜欢被高频打，15~30 分钟足够。"
+    },
+    "rss_max_items_per_poll": {
+      "description": "单次轮询每个订阅最多推送条数",
+      "hint": "防止某个源一次吐出几十条时刷屏，超出的只记录不推送。"
+    },
+    "rss_first_poll_silent": {
+      "description": "新订阅首次轮询不推送历史",
+      "hint": "强烈建议开启：否则刚订阅就会把整个 RSS 历史全推一遍。"
+    },
+    "rss_history_days": {
+      "description": "推送去重记录保留天数"
+    },
+    "rsshub_base": {
+      "description": "RSSHub 实例地址",
+      "hint": "用于把 /rsshub 路由补全成完整地址。自建实例更稳定。"
+    },
+    "mikan_base": {
+      "description": "Mikan Project 地址",
+      "hint": "用于生成单番 RSS。国内访问不畅时可改成镜像域名。"
+    },
+    "webhook_enabled": {
+      "description": "启用 AutoBangumi Webhook 接收",
+      "hint": "开启后暴露一个 HTTP 接口，AutoBangumi 等下载器可以把「新集下载完成」等事件推过来。"
+    },
+    "webhook_path": {
+      "description": "Webhook 路径",
+      "hint": "完整地址是 http(s)://<你的AstrBot>/api/<这里的路径>。"
+    },
+    "webhook_token": {
+      "description": "Webhook 校验令牌",
+      "hint": "留空表示不校验（不推荐）。填写后请求必须带 X-Webhook-Token 头且完全一致。"
+    },
+    "webhook_notify_watchers": {
+      "description": "只推给追番表里有这部番的会话",
+      "hint": "开启后，除固定推送目标外，追番表里收录了该番剧的会话也会收到通知；一台下载器服务多个群时可避免互相刷屏。"
+    },
+    "webhook_auto_progress": {
+      "description": "新集入库时自动推进追番进度",
+      "hint": "收到「下载完成 / 整理入库」事件时，把追番表里对应番剧的进度推到该集。只会往前推，不会回退。"
+    },
+    "webhook_port": {
+      "description": "Webhook 独立监听端口",
+      "hint": "0 表示不开启（此时只走 AstrBot 面板的 /api/plug/ 路由，需要面板登录态）。填 1-65535 会额外起一个只处理 Webhook 的极简 HTTP 服务，供 AutoBangumi 直连；开启时必须同时填写 Webhook Token，否则拒绝启动。"
+    },
+    "webhook_bind": {
+      "description": "Webhook 监听地址",
+      "hint": "独立监听端口绑定的网卡。与下载器同机时建议改成 127.0.0.1，仅本机可访问。"
+    },
+    "dedup_window_seconds": {
+      "description": "通知去重时间窗（秒）",
+      "hint": "同一条通知在窗口内重复到达只发一次。"
+    },
+    "anime1_enabled": {
+      "description": "启用 anime1.me 在线观看索引",
+      "hint": "提供「在线看」链接与番剧列表。该站为第三方聚合站，链接仅作索引。"
+    },
+    "anime1_refresh_hours": {
+      "description": "anime1 列表刷新时刻",
+      "hint": "整点小时数，英文逗号分隔，例如 1,13,22。留空表示不自动刷新。"
+    },
+    "default_platform_id": {
+      "description": "默认平台适配器 ID",
+      "hint": "Webhook 目标只给了 QQ 号 / 群号时，用它拼出完整会话标识。"
+    },
+    "send_max_retries": {
+      "description": "推送失败重试次数"
+    },
+    "send_retry_delay_seconds": {
+      "description": "推送重试基础延迟（秒）",
+      "hint": "指数退避：第 N 次等待 延迟 × 2^(N-1)。"
+    },
+    "send_concurrency": {
+      "description": "推送并发上限",
+      "hint": "同时最多给几个会话发消息，太高容易触发平台风控。"
+    },
+    "gacha_source": {
+      "description": "抽番数据来源",
+      "hint": "yuc = 長門番堂季度新番表（含制作组 / 声优 / 题材）；bangumi = Bangumi 每日放送；auto = 先 yuc 失败回落 bangumi。",
+      "labels": [
+        "auto 先长门番堂，失败回落 Bangumi",
+        "yuc 长门番堂季度新番表",
+        "bangumi Bangumi 每日放送"
+      ]
+    },
+    "webui_enabled": {
+      "description": "启用 Dashboard 管理页面",
+      "hint": "关闭后不注册任何 Web 路由，聊天指令不受影响。"
+    },
+    "webui_theme": {
+      "description": "WebUI 默认主题",
+      "hint": "首次打开页面时使用，之后以页面里选择的主题为准。",
+      "labels": [
+        "午夜霓虹 Midnight",
+        "极光 Aurora",
+        "樱绯 Sakura",
+        "蓝图 Blueprint",
+        "素笺 Paper",
+        "落日 Sunset"
+      ]
+    }
+  },
+  "pages": {
+    "nexus": {
+      "title": "番剧中枢",
+      "desc": "查番、追番、RSS 订阅、每日播报与卡片预览，一个面板全管完。",
+      "description": "查番、追番、RSS 订阅、每日播报与卡片预览，一个面板全管完。"
+    }
+  }
+}

@@ -1,0 +1,701 @@
+<div align="center">
+
+<img src="assets/logo.png" width="148" alt="番剧中枢 Logo" />
+
+# 番剧中枢 · Bangumi Nexus
+
+**一个插件，管完你的整条番剧链路：查番 → 追番 → 订阅 → 播报。**
+
+[![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.25-6c8cff?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-AGPL--3.0--or--later-a6228c?style=flat-square)](LICENSE)
+[![Commands](https://img.shields.io/badge/%E6%8C%87%E4%BB%A4-41-3fb27f?style=flat-square)](#指令一览)
+[![Themes](https://img.shields.io/badge/%E5%8D%A1%E7%89%87%E4%B8%BB%E9%A2%98-6-f0913a?style=flat-square)](#卡片主题预览)
+
+</div>
+
+---
+
+## 这是什么
+
+番剧中枢是 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的番剧插件。它把散落在 8 个数据源里的信息拼成一张卡片，
+把「今天播什么」推到群里，把 RSS 更新变成一条有人味的消息，还给你一个能在浏览器里点点点的管理面板。
+
+它想解决的是这么一件事：**追番这件事本来需要好几个插件、好几个网站、好几个标签页。**
+
+| 你想做的事 | 以前 | 现在 |
+| --- | --- | --- |
+| 查一部番的评分、制作组、声优、什么时候播、哪里能看 | 开 Bangumi + 开季度新番表 + 开在线站 | `/查番 芙莉莲`，一张卡全给 |
+| 记住自己追到第几集 | 记在备忘录里 | `/追番` + `/看到 芙莉莲 5` |
+| 新一集出了立刻知道 | 手动刷 Mikan | `/sub`，字幕组一发布就推群 |
+| 每天早上看今天有什么番 | 手动查 | 定时播报，还能让 Bot 用自己的人格说 |
+| 改配置 | 翻 JSON | 打开 Dashboard 里的管理页 |
+
+### 亮点
+
+- **跨源聚合，不是简单堆链接。** 以 [bangumi-data](https://github.com/bangumi-data/bangumi-data) 的跨站 ID 表为枢纽，
+  把 Bangumi 条目、長門番堂的制作组／声优、anime1 的在线索引、AGE 动漫的更新集数、萌娘百科词条、Mikan 的 RSS 地址
+  匹配到同一部番上。标题做了半角化、罗马音、季数别名的归一化，中日繁三种写法都能对上。
+- **6 套卡片主题，4 级渲染兜底。** 优先用 AstrBot 自带的无头浏览器渲染 HTML 模板；渲染失败自动降级到本地 Pillow 绘制，
+  再不行走 t2i 文字转图，最后退回纯文本。**任何一环挂掉，功能都不会消失。**
+- **通知走 AstrBot 人格。** 新番播报 / RSS 更新 / Webhook 事件会先让当前人格用自己的口吻说一句，再带着卡片一起发。
+  插件只负责给「要转述什么」，语气和人设完全由你在 AstrBot 里配的人格决定。
+- **一个像样的管理面板。** 9 个视图、6 套主题、明暗自适应、紧凑模式。改配置、看日志、管追番、调订阅、
+  预览卡片、跑健康检查，都不用碰命令行。
+- **每会话独立设置。** 卡片主题、渲染方式、结果版式、是否收播报、推送投递到哪个会话，都能按群 / 按私聊分别设定，
+  互不干扰。
+- **41 条指令，21 个中文别名。** `/动漫`、`/放送时间`、`/追番列表`、`/抽番` 都能直接喊，不用背英文。
+
+<p align="center">
+  <a href="#管理面板"><img src="assets/webui/watch.webp" alt="番剧中枢 管理面板 · 追番" width="760"></a><br>
+  <sub>Dashboard 里的管理面板（更多截图见 <a href="#管理面板">管理面板</a>）</sub>
+</p>
+
+---
+
+## 卡片主题预览
+
+六套配色，聊天里发 `/番剧中枢 樱绯` 就能临时换一套看看，满意了再在配置里定下来。
+
+| 午夜霓虹 `midnight` | 极光 `aurora` |
+| --- | --- |
+| ![午夜霓虹](assets/cards/help_midnight.webp) | ![极光](assets/cards/help_aurora.webp) |
+
+| 樱绯 `sakura` | 蓝图 `blueprint` |
+| --- | --- |
+| ![樱绯](assets/cards/help_sakura.webp) | ![蓝图](assets/cards/help_blueprint.webp) |
+
+| 素笺 `paper` | 落日 `sunset` |
+| --- | --- |
+| ![素笺](assets/cards/help_paper.webp) | ![落日](assets/cards/help_sunset.webp) |
+
+> 上面这六张就是 `/番剧中枢` 的帮助卡实拍，其余卡片（日历、条目、追番、更新通知、抽番、季度表、诊断）
+> 共用同一套设计语言与配色变量。
+
+---
+
+## 安装
+
+### 方式一：插件市场（推荐）
+
+AstrBot Dashboard → **插件市场** → 搜索 `番剧中枢` 或 `bangumi_nexus` → 安装。
+
+### 方式二：手动安装
+
+```bash
+cd AstrBot/data/plugins
+git clone https://github.com/Whereis-Alice/astrbot_plugin_bangumi_nexus.git
+```
+
+然后在 Dashboard 的插件列表里点「重载插件」。
+
+### 依赖
+
+AstrBot 会自动读取 `requirements.txt` 安装：
+
+| 依赖 | 用途 | 缺了会怎样 |
+| --- | --- | --- |
+| `httpx[socks]` | 所有网络请求、SOCKS 代理支持 | **必需** |
+| `beautifulsoup4` | 解析長門番堂 / AGE / 萌娘百科的网页 | 这三个源不可用，其余正常 |
+| `feedparser` | RSS 解析（容错最好） | 自动退回 Python 内置 `xml.etree`，绝大多数源仍可解析 |
+| `Pillow` | 卡片渲染的本地兜底 | 少一级降级，仍可用 t2i 与纯文本 |
+
+卡片的 HTML 渲染用的是 AstrBot 自带的渲染能力，**不需要你额外装浏览器**。
+
+---
+
+## 快速上手
+
+装完什么都不用配就能用：
+
+```
+/番剧中枢              查看全部指令（帮助卡）
+/查番 葬送的芙莉莲      跨源聚合卡，看看效果
+/today                 今天播什么
+```
+
+想让它真正开始「帮你干活」，配三件事就够：
+
+**1. 追番 + 订阅（在群里发，不用管理员）**
+
+```
+/追番 葬送的芙莉莲
+```
+
+加进追番表后，插件会顺手找到这部番的 Mikan 资源源并推荐给你，照着提示 `/sub` 一下：
+
+```
+/sub 芙莉莲 mikan:葬送的芙莉莲
+```
+
+之后字幕组一发布新集，群里就会收到通知。
+
+**2. 每日播报（Dashboard 里开）**
+
+插件配置 → **每日播报** → 打开 `push_enabled`，设好 `push_time`。
+推送目标有两种填法：在 `push_targets` 里填会话 ID，或者干脆在群里发一句：
+
+```
+/日历订阅 开
+```
+
+**3. 让通知有人味（默认已开）**
+
+`persona_reply_enabled` 默认开启。只要你的 AstrBot 配了人格和 LLM 供应商，
+通知就会变成「人格说一句 + 卡片」，而不是干巴巴的机器人播报。
+
+---
+
+## 指令一览
+
+全部 41 条指令，6 个分类。下表里的 `/` 是默认唤醒前缀，实际请按你的 AstrBot 配置替换。
+标注 **（仅管理员）** 的指令需要管理员权限。
+#### 🔍 查番 — 从八个源里把一部番的全部信息拼齐
+
+| 指令 | 说明 | 别名 |
+| --- | --- | --- |
+| `/bgm <关键词|条目ID|help> [数量]` | 在 Bangumi 搜索条目；传纯数字按条目 ID 直接开卡。 | — |
+| `/bgm番剧 <关键词>` | 只搜 TV 动画，排除剧场版与三次元。 | `/动漫`、`/动画`、`/番`、`/动画片` |
+| `/bgm剧场版 <关键词>` | 只搜剧场版 / 电影。 | `/电影`、`/劇場版` |
+| `/bgm漫画 <关键词>` | 搜漫画与轻小说条目。 | `/漫画` |
+| `/查番 <名称>` | 跨源聚合卡：评分、放送倒计时、制作组、声优、正版与在线观看入口一次给全。 | — |
+| `/放送时间 <名称|条目ID>` | 下一集什么时候播、还差几天，按 Bot 本地时区换算。 | — |
+| `/在线观看 <名称>` | 汇总正版平台、anime1、AGE 动漫与官网链接。 | — |
+| `/萌娘百科 <关键词>` | 取萌娘百科词条摘要，作品和角色都能查。 | — |
+
+#### 📅 日历 — 今天播什么、这一季有什么
+
+| 指令 | 说明 | 别名 |
+| --- | --- | --- |
+| `/calendar` | 整周每日放送总览卡。 | `/每日放送` |
+| `/today` | 今天放送的番，按评分排序。 | `/今日放送` |
+| `/今日新番` | 今日放送的精简列表，适合群里刷屏少一点的场合。 | — |
+| `/季度新番 [202607]` | 整季新番表：题材、制作组、首播时间，数据来自長門番堂。 | — |
+| `/新番 today|push|status` | 指令组：today 看今日、push 立即播报、status 查播报状态（后两者限管理员）。 | `/bangumi` |
+
+#### 📖 追番 — 自己的番自己记，进度和放送提醒都在
+
+| 指令 | 说明 | 别名 |
+| --- | --- | --- |
+| `/追番 <名称|条目ID>` | 加入追番表，并顺手推荐可一键订阅的 Mikan 资源源。 | — |
+| `/弃坑 <名称>` | 把一部番标记为已弃坑（记录保留，可再 /追番 复活）。 | — |
+| `/追番列表` | 追番进度卡：进度条、放送倒计时、评分一览。 | `/我的追番` |
+| `/看到 <名称> <集数>` | 更新观看进度；集数写 +1 表示往前推一集。 | — |
+
+#### 📡 订阅推送 — RSS 进来，卡片出去，人格负责说话
+
+| 指令 | 说明 | 别名 |
+| --- | --- | --- |
+| `/sub <名称> <RSS地址|mikan:关键词|rsshub:路径|dmhy:关键词>` | 在当前会话订阅一个源；支持 mikan: / rsshub: / dmhy: 简写。 | — |
+| `/unsub <名称>` | 退订一个源。 | — |
+| `/sub_list` | 当前会话的订阅清单卡。 | `/订阅列表` |
+| `/sub_test <名称|RSS地址>` | 立刻抓一次并把最新几条发出来，不写去重库，用来验证源是否可用。 | — |
+| `/sub_stop` | 暂停当前会话的全部推送（订阅保留）。 | `/rss_stop`、`/停止RSS`、`/停止推送` |
+| `/sub_status` | 轮询任务状态：下次抓取时间、成功失败计数。 | `/推送状态`、`/任务状态` |
+| `/sub_state <名称>` | 单个订阅的详情：上次抓取、最新条目、最近错误。 | `/订阅状态` |
+| `/activate_subs` | 恢复当前会话的全部订阅。 | — |
+| `/deactivate_subs` | 停用当前会话的全部订阅。 | — |
+| `/unsub_all` | 清空当前会话的订阅，需要二次确认。 | — |
+| `/sub_export` | 导出订阅与追番表为 JSON 文本，可直接贴给别的群。 | — |
+| `/sub_import <JSON>` | 导入 /sub_export 产出的 JSON，重名条目自动跳过。 | — |
+| `/sub_profile get|set <主题|渲染器>` | 按会话覆盖卡片主题与渲染方式，不影响别的群。 | — |
+| `/sub_session get|set [会话ID]` | 把本会话的推送改投到另一个会话（例如群里订阅、私聊收）。 | — |
+| `/日历订阅 开|关` | 让每日新番播报也发到当前会话，无需管理员改配置。 | — |
+| `/rsshelp` | 订阅相关的详细说明卡（含常用 RSSHub 路径示例）。 | `/RSS帮助` |
+
+#### 🎰 娱乐 — 不知道看什么的时候交给运气
+
+| 指令 | 说明 | 别名 |
+| --- | --- | --- |
+| `/抽番 [题材]` | 从当季新番里随机抽一部，可按题材过滤（如「抽番 恋爱」）。 | `/随机番剧` |
+| `/番剧推荐` | AGE 动漫推荐位的热门更新。 | — |
+
+#### 🛠 数据与维护 — 数据源是活的，出问题先看这里
+
+| 指令 | 说明 | 别名 |
+| --- | --- | --- |
+| `/番剧中枢 [主题名]` | 帮助总览卡；带主题名可临时换配色预览。 | `/番剧帮助` |
+| `/番剧诊断` | **（仅管理员）** 逐个数据源做健康检查，给出耗时与失败原因。 | — |
+| `/anime_update` | 立刻刷新 anime1.me 在线观看索引。 | — |
+| `/检查番剧数据` | 查看各数据源的缓存条目数与最后刷新时间。 | — |
+| `/更新番剧数据 [202607]` | **（仅管理员）** 重新抓取指定季度的番剧数据，省略则用当季。 | — |
+| `/bgm模板 1|2|3` | 切换搜索结果卡的版式（1 详情 / 2 紧凑 / 3 纯文本）。 | — |
+
+
+### 给 LLM 用的工具
+
+插件还注册了 4 个函数工具，你的 Bot 在自由对话里也能自己调用它们，不需要用户记指令：
+
+| 工具 | 作用 |
+| --- | --- |
+| `get_anime_list` | 按季度／时间范围列出番剧表 |
+| `get_watch_url` | 拿到某部番的在线观看地址 |
+| `search_moegirl` | 查萌娘百科词条摘要 |
+| `search_bangumi_subject` | 在 Bangumi 搜条目并返回结构化信息 |
+
+于是「有什么新番推荐吗」这种自然语言提问，Bot 可以自己去查了再回答。
+
+---
+
+## 配置项
+
+共 52 项，全部可以在 Dashboard 的插件配置页或本插件自带的管理页里改。**开箱默认值就能用，下面这些都是可选的调整。**
+
+<details>
+<summary>管理页里的配置视图长这样（点开看全图）</summary>
+
+<p align="center">
+  <img src="assets/webui/config-full.webp" alt="番剧中枢 管理面板 · 配置全览" width="820">
+</p>
+
+</details>
+
+#### 卡片与渲染
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `card_theme` | string | `midnight` | 卡片默认主题。所有卡片（日历 / 条目 / 追番 / 更新 / 抽番 / 帮助）共用这套配色，聊天里也能用「番剧主题 樱绯」临时切换。<br>可选：`midnight`、`aurora`、`sakura`、`blueprint`、`paper`、`sunset` |
+| `card_renderer` | string | `auto` | 卡片渲染方式。auto = AstrBot 无头浏览器 → Pillow 本地绘制 → t2i 文字转图 → 纯文本，逐级兜底；选 text 表示永远只发文字。<br>可选：`auto`、`html`、`raster`、`t2i`、`text` |
+| `card_width` | int | `860` | 卡片渲染宽度（像素）。760~1200。太窄会挤，太宽在手机上要缩放。 |
+
+#### 网络与缓存
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `bangumi_access_token` | string | （空） | Bangumi Access Token。留空也能用（只读接口不强制）。在 https://next.bgm.tv/demo/access-token 生成后填入可提高配额、减少 429。 |
+| `user_agent` | string | （空） | 自定义 User-Agent。留空使用插件内置 UA。Bangumi 官方要求 UA 里带上应用标识。 |
+| `proxy` | string | （空） | HTTP / SOCKS 代理。形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080。留空表示直连。 |
+| `http_timeout_seconds` | int | `20` | 单次网络请求超时（秒） |
+| `http_max_retries` | int | `3` | 网络请求重试次数。指数退避重试，只对超时 / 5xx / 429 生效。 |
+| `cache_ttl_minutes` | int | `30` | 数据源缓存时长（分钟）。日历、季度表、番剧列表等慢变数据的内存缓存时长，0 表示不缓存。 |
+| `max_concurrency` | int | `5` | 并发请求上限。抓封面、批量查条目时同时最多几个请求，调太高容易被限流。 |
+
+#### 搜索与匹配
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `search_max_results` | int | `5` | 搜索最多返回条数 |
+| `enable_cross_match` | bool | 开 | 启用跨源信息聚合。开启后一张卡里同时给出 Bangumi 评分、放送时间、anime1 在线观看、長門番堂 制作组与声优、Mikan RSS 地址。关闭则只查 Bangumi，更快。 |
+| `translate_summary` | bool | 关 | 日文简介自动翻译成中文。借用 AstrBot 已配置的 LLM 供应商翻译，会消耗 token。 |
+| `translate_provider_id` | string | （空） | 翻译使用的 LLM 供应商。留空则使用当前会话正在用的供应商。 |
+| `long_reply_as_card` | bool | 开 | 长文本回复自动转成卡片。超过 200 字或含多行的回复改用图片发送，避免刷屏。 |
+
+#### 每日播报
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `push_enabled` | bool | 关 | 启用每日新番播报。每天定时把「今日放送」卡片推给下面配置的目标会话。 |
+| `push_time` | string | `08:30` | 每日播报时间。24 小时制 HH:MM，可用英文逗号写多个时间点，例如 08:30,20:00。按 Bot 所在机器的本地时区。 |
+| `push_targets` | list | （空） | 播报目标会话（UMO）。填写完整会话标识，形如 aiocqhttp:GroupMessage:123456。也可以直接在群里发「日历订阅 开」让本群自助订阅。 |
+| `push_max_items` | int | `12` | 播报卡片最多列出的番剧数 |
+| `push_sort_by` | string | `score` | 播报排序依据<br>可选：`score`、`doing`、`time`、`name` |
+| `push_sort_order` | string | `desc` | 播报排序方向<br>可选：`desc`、`asc` |
+| `push_min_score` | float | `0` | 播报评分下限。低于该评分的番剧不进播报；0 表示不过滤。新番前期常常没有评分，设太高会漏。 |
+| `push_min_doing` | int | `0` | 播报在看人数下限。0 表示不过滤。 |
+
+#### 人格转述
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `persona_reply_enabled` | bool | 开 | 通知走 AstrBot 人格转述。开启后新番播报 / RSS 更新 / Webhook 通知会先让当前人格用自己的口吻说一句，再附上卡片一起发送。插件只提供任务指令，人格由 AstrBot 自身配置决定。 |
+| `persona_id` | string | （空） | 转述用的人格。指定用哪个人格转述新番通知。留空则跟随目标会话当前的默认人格；两者都取不到时只发卡片。 |
+| `persona_provider_id` | string | （空） | 人格转述使用的 LLM 供应商。留空则使用目标会话当前正在用的供应商；取不到时自动跳过转述、只发卡片。 |
+| `persona_instruction` | text | `请用你自己的口吻，简短自然地向大家转述下面这条番剧通知。保持信息准确，不要编造剧情，不要使用列表和标题，控制在两句话以内。` | 人格转述任务指令。只写「要做什么」，不要在这里定义人格 —— 语气与人设由 AstrBot 的人格设置决定。 |
+| `persona_max_chars` | int | `180` | 人格转述最长字数。超出会截断，防止人格发挥过头把卡片挤到看不见。 |
+
+#### RSS 订阅
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `rss_enabled` | bool | 开 | 启用 RSS 订阅轮询 |
+| `rss_interval_minutes` | int | `15` | RSS 轮询间隔（分钟）。最小 5 分钟。Mikan / RSSHub 都不喜欢被高频打，15~30 分钟足够。 |
+| `rss_max_items_per_poll` | int | `5` | 单次轮询每个订阅最多推送条数。防止某个源一次吐出几十条时刷屏，超出的只记录不推送。 |
+| `rss_first_poll_silent` | bool | 开 | 新订阅首次轮询不推送历史。强烈建议开启：否则刚订阅就会把整个 RSS 历史全推一遍。 |
+| `rss_history_days` | int | `14` | 推送去重记录保留天数 |
+| `rsshub_base` | string | `https://rsshub.app` | RSSHub 实例地址。用于把 /rsshub 路由补全成完整地址。自建实例更稳定。 |
+| `mikan_base` | string | `https://mikanani.me` | Mikan Project 地址。用于生成单番 RSS。国内访问不畅时可改成镜像域名。 |
+
+#### Webhook 接入
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `webhook_enabled` | bool | 关 | 启用 AutoBangumi Webhook 接收。开启后暴露一个 HTTP 接口，AutoBangumi 等下载器可以把「新集下载完成」等事件推过来。 |
+| `webhook_path` | string | `bangumi_nexus/notify` | Webhook 路径。完整地址是 http(s)://<你的AstrBot>/api/<这里的路径>。 |
+| `webhook_token` | string | （空） | Webhook 校验令牌。留空表示不校验（不推荐）。填写后请求必须带 X-Webhook-Token 头且完全一致。 |
+| `webhook_notify_watchers` | bool | 开 | 只推给追番表里有这部番的会话。开启后，除固定推送目标外，追番表里收录了该番剧的会话也会收到通知；一台下载器服务多个群时可避免互相刷屏。 |
+| `webhook_auto_progress` | bool | 关 | 新集入库时自动推进追番进度。收到「下载完成 / 整理入库」事件时，把追番表里对应番剧的进度推到该集。只会往前推，不会回退。 |
+| `webhook_port` | int | `0` | Webhook 独立监听端口。0 表示不开启（此时只走 AstrBot 面板的 /api/plug/ 路由，需要面板登录态）。填 1-65535 会额外起一个只处理 Webhook 的极简 HTTP 服务，供 AutoBangumi 直连；开启时必须同时填写 Webhook Token，否则拒绝启动。 |
+| `webhook_bind` | string | `0.0.0.0` | Webhook 监听地址。独立监听端口绑定的网卡。与下载器同机时建议改成 127.0.0.1，仅本机可访问。 |
+| `dedup_window_seconds` | int | `300` | 通知去重时间窗（秒）。同一条通知在窗口内重复到达只发一次。 |
+
+#### 在线观看索引
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `anime1_enabled` | bool | 开 | 启用 anime1.me 在线观看索引。提供「在线看」链接与番剧列表。该站为第三方聚合站，链接仅作索引。 |
+| `anime1_refresh_hours` | string | `1,13,22` | anime1 列表刷新时刻。整点小时数，英文逗号分隔，例如 1,13,22。留空表示不自动刷新。 |
+
+#### 消息投递
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `default_platform_id` | string | `aiocqhttp` | 默认平台适配器 ID。Webhook 目标只给了 QQ 号 / 群号时，用它拼出完整会话标识。 |
+| `send_max_retries` | int | `3` | 推送失败重试次数 |
+| `send_retry_delay_seconds` | float | `2` | 推送重试基础延迟（秒）。指数退避：第 N 次等待 延迟 × 2^(N-1)。 |
+| `send_concurrency` | int | `3` | 推送并发上限。同时最多给几个会话发消息，太高容易触发平台风控。 |
+
+#### 其它
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `gacha_source` | string | `auto` | 抽番数据来源。yuc = 長門番堂季度新番表（含制作组 / 声优 / 题材）；bangumi = Bangumi 每日放送；auto = 先 yuc 失败回落 bangumi。<br>可选：`auto`、`yuc`、`bangumi` |
+| `webui_enabled` | bool | 开 | 启用 Dashboard 管理页面。关闭后不注册任何 Web 路由，聊天指令不受影响。 |
+| `webui_theme` | string | `midnight` | WebUI 默认主题。首次打开页面时使用，之后以页面里选择的主题为准。<br>可选：`midnight`、`aurora`、`sakura`、`blueprint`、`paper`、`sunset` |
+
+
+> 提示：所有配置改动**立即生效**，不需要重载插件。网络相关的改动（代理 / 超时 / 并发 / 缓存）会热重建 HTTP 客户端，
+> 定时相关的改动（播报时间 / RSS 间隔）会重排调度。
+
+---
+
+## 管理面板
+
+装好插件后，Dashboard 侧边栏会多出一个「番剧中枢」页面。9 个视图分工如下：
+
+<p align="center">
+  <img src="assets/webui/overview.webp" alt="番剧中枢 管理面板 · 概览" width="860">
+</p>
+
+| 视图 | 你能在这里做什么 |
+| --- | --- |
+| **概览** | 运行状态一屏看完：数据源统计、HTTP 缓存命中率、调度器下次执行时间、推送成功/失败计数、活动日志（可按级别过滤）；还有「刷新 anime1」「立即播报」「立即抓取 RSS」「Webhook 自测」几个一键操作 |
+| **配置** | 52 项配置按 10 组编辑，开关/滑块/下拉/多行文本各按类型给控件，带说明与默认值提示。密钥类字段只显示「已配置」不回显 |
+| **追番** | 选一个会话，改进度、改状态、打分、写备注、删条目；也能直接在这里搜名字加进追番表 |
+| **订阅** | 增删订阅、单条测试抓取、批量启停、导出 JSON / 粘贴导入 |
+| **播报** | 配置推送目标、查看「自助订阅」进来的会话、按指定星期手动触发一次播报 |
+| **卡片** | 6 主题 × 4 种卡片的**真实渲染**预览，点开可放大到原始像素、可下载 PNG。改主题前先来这里看长相 |
+| **数据源** | 8 个数据源逐个体检，给出耗时与失败原因，一眼看出是哪个站挂了 |
+| **指令** | 全部 41 条指令速查表，按分类分组，显示别名与权限要求 |
+| **关于** | 版本、限额、安全提示、数据源致谢 |
+
+### 面板长什么样
+
+| | |
+| :--: | :--: |
+| ![配置](assets/webui/config.webp) | ![追番](assets/webui/watch.webp) |
+| **配置** · 52 项分 10 组，控件按类型自动匹配 | **追番** · 进度 / 状态 / 评分 / 备注就地改 |
+| ![卡片](assets/webui/cards.webp) | ![数据源](assets/webui/sources.webp) |
+| **卡片** · 6 主题 × 4 版式真实渲染预览 | **数据源** · 8 个源逐个体检，给耗时与失败原因 |
+| ![订阅](assets/webui/subs.webp) | ![播报](assets/webui/targets.webp) |
+| **订阅** · 增删、单条测试、批量启停、导入导出 | **播报** · 推送目标与自助订阅会话管理 |
+
+指令视图会把 41 条指令按 6 个分类整张摊开，别名和权限都在表里：
+
+<p align="center">
+  <img src="assets/webui/commands.webp" alt="番剧中枢 管理面板 · 指令速查" width="820">
+</p>
+
+### 6 套主题
+
+面板本身也有 6 套主题（和卡片同名同配色），右上角随时切换；还有一个紧凑模式，屏幕小的时候能多塞点内容。
+**界面偏好存在后端**，所以换浏览器、换设备打开也是你上次的样子。
+
+<p align="center">
+  <img src="assets/webui/themes.webp" alt="番剧中枢 管理面板 6 套主题" width="900">
+</p>
+
+<p align="center"><sub>从左上到右下：午夜霓虹 · 极光 · 樱绯 · 蓝图 · 素笺 · 落日</sub></p>
+
+窄屏会自动折成单列，手机上也能改配置、点一次播报：
+
+<p align="center">
+  <img src="assets/webui/mobile.webp" alt="番剧中枢 管理面板 移动端" width="300">
+</p>
+
+---
+
+## 卡片渲染是怎么兜底的
+
+聊天平台对图片友好，对长文本不友好，所以插件的默认输出是卡片。但渲染是最容易出问题的一环，
+因此设计了一条 4 级降级链：
+
+```
+html    AstrBot 自带无头浏览器渲染 HTML 模板（最好看，13 套版式）
+  ↓ 连续 3 次失败
+raster  Pillow 本地绘制（不依赖浏览器，样式简化但信息完整）
+  ↓ Pillow 缺失或字体不可用
+t2i     AstrBot 的文字转图服务
+  ↓ 服务不可用
+text    纯文本（永远可用的最后一站）
+```
+
+几个实现细节：
+
+- `auto` 模式下，HTML 渲染连续失败 3 次会进入 **120 秒冷却**，期间直接走 Pillow，不再反复撞墙。冷却结束自动恢复。
+- 渲染结果按内容哈希缓存在插件数据目录，**最多 240 个文件 / 保留 6 小时**，超出自动清理，不会无限堆盘。
+- 番剧封面单独缓存 30 天，单张上限 4 MB。
+- 想彻底关掉图片，把 `card_renderer` 设成 `text` 就行，所有功能都会退化成纯文本，不会缺功能。
+
+---
+
+## 让通知有「人味」
+
+这是本插件和其它番剧插件最不一样的地方。
+
+传统做法是：新集出了 → 发一条模板消息。结果就是群里多了一个机械播报员。
+
+番剧中枢的做法是：新集出了 → **把这条通知交给你的 Bot 人格，让它用自己的口吻说一句** → 人格的话 + 信息卡片一起发。
+
+```
+【樱酱】芙莉莲第 12 集出啦，字幕组这次很快嘛～今晚一起看？
+[附：更新通知卡片]
+```
+
+配置要点：
+
+- `persona_reply_enabled` 默认开启。
+- `persona_id` 留空 = 跟随目标会话当前的默认人格，也就是说**你在哪个群设了什么人格，播报就是什么口吻**。
+- `persona_provider_id` 留空 = 用目标会话当前正在用的 LLM 供应商。
+- `persona_instruction` 只写「要做什么」（转述这条通知），**不要在里面写人设** —— 人设归 AstrBot 的人格系统管，
+  这样你换人格时不用来改插件配置。
+- 拿不到人格或供应商时**自动跳过转述、只发卡片**，不会因为 LLM 挂了就丢通知。
+- `persona_max_chars` 限制转述长度（默认 180 字），防止人格发挥过头把卡片挤到看不见。
+
+覆盖范围：每日新番播报、RSS 更新推送、Webhook 事件通知。
+
+---
+
+## RSS 订阅
+
+### 四种写法
+
+```
+/sub 芙莉莲 https://mikanani.me/RSS/Bangumi?bangumiId=3141   完整地址
+/sub 芙莉莲 mikan:葬送的芙莉莲                                 Mikan 搜索
+/sub 每日新番 rsshub:bangumi/calendar/today                    RSSHub 路由
+/sub 芙莉莲 dmhy:葬送的芙莉莲                                  动漫花园搜索
+/sub 葬送的芙莉莲                                              只给名字，自动去找源
+```
+
+最后一种是推荐用法：只给番名，插件会自己去 Mikan 找对应的番剧 RSS，找到多个就列出来让你选。
+`/追番` 的时候也会顺手推荐一次。
+
+### 会遇到的坑，插件都处理了
+
+| 坑 | 处理方式 |
+| --- | --- |
+| 刚订阅就被推 50 条历史 | `rss_first_poll_silent` 默认开启：首轮只入库不推送 |
+| 某个源一次吐出几十条 | `rss_max_items_per_poll` 限流（默认 5 条），超出只记录 |
+| 同一条被重复推送 | 去重库按条目唯一标识 + `dedup_window_seconds` 时间窗双重拦截 |
+| 源挂了之后每轮都报错刷屏 | 同一个源的错误**只报一次**，恢复后才会再提醒 |
+| 高频轮询被目标站封 | 最小间隔硬限制 5 分钟，全局并发上限可配 |
+| 去重库越来越大 | 按 `rss_history_days`（默认 14 天）自动清理 |
+
+### 换群不用重配
+
+```
+/sub_export          导出成 JSON 文本
+/sub_import <JSON>   贴到新群里导入，重名自动跳过
+```
+
+追番表也一起导出，搬家很省事。
+
+---
+
+## Webhook 接入（AutoBangumi 等下载器）
+
+如果你在用 AutoBangumi / qBittorrent 之类的自动追番下载器，可以让它在「下载完成 / 整理入库」时直接通知 Bot。
+
+**1. 开启并设置令牌**
+
+配置 → Webhook 接入 → 打开 `webhook_enabled`，`webhook_token` 填一个自己编的长字符串。
+
+**2. 选一条通道**
+
+| 通道 | 地址 | 什么时候用 |
+| --- | --- | --- |
+| 面板路由 | `http(s)://<AstrBot>/api/plug/astrbot_plugin_bangumi_nexus/notify` | 面板自测用。**这条路由受 Dashboard 登录态保护**，外部程序直连会 401 |
+| 独立端口 | `http://<AstrBot主机>:<webhook_port><webhook_path>` | **推荐给下载器用。** 把 `webhook_port` 设成一个空闲端口（如 `9520`），插件会额外起一个只处理 Webhook 的极简 HTTP 服务 |
+
+**3. 在下载器里填**
+
+请求头带上 `X-Webhook-Token: <你设的令牌>`，body 是下载器自己的 JSON，插件会自动识别 6 种常见事件类型。
+
+> **安全约束：** `webhook_port > 0` 但 `webhook_token` 为空时，监听服务会**拒绝启动**并在日志里报错。
+> 这是故意的 —— 一个不校验令牌的公网端口等于让任何人往你群里发消息。
+> 与下载器同机时建议把 `webhook_bind` 改成 `127.0.0.1`。
+
+**4. 两个加分项**
+
+- `webhook_notify_watchers`（默认开）：除固定目标外，**追番表里收录了这部番的会话**也会收到通知。
+  一台下载器服务好几个群时，各群只收自己关心的番。
+- `webhook_auto_progress`（默认关）：新集入库时自动把追番进度推到该集。只往前推，不会回退。
+
+---
+
+## 数据源与致谢
+
+这个插件本身不存储、不缓存、不分发任何影音内容，只做信息索引。全部数据来自下列公开来源，版权归各自站点与权利人所有。
+
+| 数据源 | 提供什么 | 地址 |
+| --- | --- | --- |
+| **Bangumi 番组计划** | 条目、评分、每日放送、在看人数、分集列表 | <https://bgm.tv> |
+| **bangumi-data** | 跨站 ID 与多语言标题对照总表（本插件的匹配枢纽），CC0-1.0 | <https://github.com/bangumi-data/bangumi-data> |
+| **長門番堂** | 季度新番表：制作组、声优、题材、首播时间 | <http://yuc.wiki> |
+| **AGE 动漫** | 推荐位与更新集数 | <https://www.agedm.io> |
+| **anime1.me** | 在线观看索引（繁体） | <https://anime1.me> |
+| **萌娘百科** | 作品与角色词条摘要，CC BY-NC-SA 3.0 | <https://zh.moegirl.org.cn> |
+| **Mikan Project** | 单番字幕组资源 RSS | <https://mikanani.me> |
+| **RSSHub** | 万物皆可 RSS | <https://docs.rsshub.app> |
+
+感谢这些站点长期免费提供数据。请合理设置轮询间隔（默认值已经很保守），不要给它们添麻烦。
+
+---
+
+## 与上游插件的关系
+
+番剧中枢是在下面 6 个开源插件的基础上重写与融合而成的，**指令名保持兼容**，但内部实现是全新的。
+向原作者致谢：
+
+| 上游插件 | 借鉴了什么 |
+| --- | --- |
+| [NoFizz/astrbot_plugin_bangumi_calendar](https://github.com/NoFizz/astrbot_plugin_bangumi_calendar) | 每日放送卡片、封面并发抓取与缓存清理策略、`/新番` 指令组 |
+| [united-pooh/astrbot_plugin_bangumi](https://github.com/united-pooh/astrbot_plugin_bangumi) | `/bgm` 系列搜索、日文简介翻译、长回复转卡片、`/追番` `/弃坑` `/放送时间` |
+| [Yometenma/astrbot_plugin_autobangumi_notify](https://github.com/Yometenma/astrbot_plugin_autobangumi_notify) | AutoBangumi Webhook 事件解析、目标会话拼装、指数退避与去重 |
+| [zhist2028/astrbot_plugin_anime1_list](https://github.com/zhist2028/astrbot_plugin_anime1_list) | anime1.me 列表抓取与观看地址解析、`get_anime_list` / `get_watch_url` 函数工具 |
+| [FlanChanXwO/astrbot_plugin_rsshub](https://github.com/FlanChanXwO/astrbot_plugin_rsshub) | RSS 订阅指令体系（`/sub` 全家桶）、RSSHub 路由简写 |
+| [xco2/astrbot_plugin_anime_gacha](https://github.com/xco2/astrbot_plugin_anime_gacha) | `/抽番` `/今日新番` `/查番`、萌娘百科查询、季度数据维护指令 |
+
+### 融合时顺手修掉的问题
+
+- **定时不准**：上游用裸 `asyncio.sleep(间隔)` 累积漂移。改为对齐整分钟的调度循环，长期运行也不会跑偏。
+- **写文件到插件目录**：封面缓存曾落在插件安装目录，更新插件就丢。改用 `StarTools.get_data_dir()`。
+- **同步阻塞**：`requests` 同步调用会卡住事件循环。全面换成 `httpx` 异步，配统一的并发闸门与指数退避。
+- **`self.logger` 不存在**：某些上游代码在 AstrBot 新版本会直接抛异常。统一改用 `from astrbot.api import logger`。
+- **Webhook 401**：`register_web_api` 注册的路由在 AstrBot 4.25 一律受面板登录态保护，外部下载器直连必然失败。
+  改为双通道，另给一个独立端口（强制令牌校验）。
+- **重依赖**：上游合计需要 `apscheduler` / `rdflib` / `html2text` 等。本插件只留 4 个轻依赖，
+  定时器、SQLite、Webhook 服务全部用标准库实现，`feedparser` 也做了 stdlib 兜底。
+- **刷新时段写成负数被静默吞掉**：解析「刷新小时」时上游直接抽走所有非数字字符，`-1` 会变成 `1`，
+  于是本想禁用的时段反而在凌晨 1 点触发。现在带符号的写法一律判为无效并跳过。
+- **番剧封面 404**：站点返回的相对路径（`/x.jpg`）被拼成 `https:/x.jpg`，封面全挂。
+  现在统一按 `http(s):` / `data:` / `//` / 相对路径四种形态补全域名。
+- **「官网」被当成首播时间**：详情表里找不到时间时，上游会兜底截取单元格前 60 个字符，
+  结果把「官网」两个字当放送时间推给用户。现在只在明确的时间字段里取值，取不到就留空。
+- **日历里有、详情表里没有的番会整条丢失**：现在以日历表为准补齐条目，至少保证番名和封面在卡片上出现。
+
+### 没有迁移的功能
+
+`astrbot_plugin_rsshub` 的 4 个知识库指令（`rsshub_kb_*`）**没有迁移**。它们依赖那个插件自建的一整套向量知识库
+与检索管线，和本插件「轻量、少依赖」的取向冲突，硬搬过来会引入一大堆重依赖。
+
+替代方案：用 `/sub_export` 导出订阅数据，再从 Dashboard 的知识库功能导入 —— AstrBot 本体的知识库比插件自建的更通用。
+
+---
+
+## 安全提示
+
+请认真读这一节，尤其是准备把 Bot 放到公网的情况。
+
+- **不要把 AstrBot Dashboard 直接暴露在公网。** 面板拥有插件配置的完整读写权限。需要远程访问请走反向代理 + 强密码，
+  或者干脆只在内网/VPN 里访问。
+- **开了 `webhook_port` 就必须设 `webhook_token`。** 插件会强制这一点（不设直接拒绝启动），但请同时确认这个端口
+  没有被暴露到公网。
+- **`bangumi_access_token` 属于凭据。** 它在面板与管理页里都不回显，导出的 JSON 里也不包含。请不要把它贴到 issue 里。
+- **`/sub_import` 会写入当前会话的数据。** 只导入你自己导出的 JSON，别执行来源不明的内容。
+- **管理员指令**（`/番剧诊断`、`/更新番剧数据`、`/新番 push`、`/新番 status`）走 AstrBot 自身的权限体系，
+  请确认你的管理员名单是对的。
+
+---
+
+## 常见问题
+
+**卡片发不出来 / 只有文字？**
+先在管理页的「卡片」视图点一下渲染，看报什么错。最常见的原因是 AstrBot 的无头浏览器渲染不可用 ——
+这种情况下插件会自动降级到 Pillow，如果连 Pillow 也没装（`pip install Pillow`），就只剩文字了。
+
+**搜不到某部番？**
+换个写法试试：中文名、日文原名、罗马音都支持，季数写「第二季」「2nd Season」「S2」都能对上。
+还是不行就 `/bgm <关键词>` 直接搜 Bangumi 看看条目到底叫什么。
+
+**订阅了但没收到推送？**
+按顺序查三件事：① `/sub_status` 看轮询任务是不是在跑；② `/sub_state <名称>` 看这个源上次抓取有没有报错；
+③ 确认没有执行过 `/sub_stop`（用 `/activate_subs` 恢复）。
+
+**每日播报没发？**
+`push_enabled` 打开了吗？`push_targets` 或 `/日历订阅 开` 至少要有一个。管理页的「播报」视图里能看到
+「生效目标」列表，空的就是没配上。另外播报时间用的是 **Bot 所在机器的本地时区**。
+
+**请求老是超时？**
+上面几个数据源里有一部分在国内直连不畅。填 `proxy`（支持 `http://` 和 `socks5://`），或者把 `mikan_base` /
+`rsshub_base` 换成可用的镜像。`/番剧诊断` 能告诉你具体是哪个源卡住。
+
+**会不会太吃资源？**
+默认配置下的常态开销很小：RSS 每 15 分钟一轮、anime1 列表一天刷 3 次、慢变数据内存缓存 30 分钟、
+并发上限 5。最重的操作是 HTML 卡片渲染，而它有缓存和冷却保护。
+
+**能只当查询工具，不要任何定时任务吗？**
+可以。关掉 `push_enabled`、`rss_enabled`、`webhook_enabled`、`anime1_enabled`，插件就只在你发指令时才动。
+
+---
+
+## 开发
+
+```
+astrbot_plugin_bangumi_nexus/
+├── main.py                 指令层：41 条指令 + 4 个函数工具，只做「事件 ↔ 服务」翻译
+├── nexus/
+│   ├── config.py           52 项配置的解析与校验
+│   ├── http.py             统一 HTTP 客户端：重试 / 缓存 / 并发闸门 / 统计
+│   ├── store.py            SQLite 持久层（全异步）
+│   ├── titles.py           标题归一化、季度换算、放送周期解析
+│   ├── catalog.py          指令目录（帮助卡与管理页共用同一份数据）
+│   ├── sources/            8 个数据源适配器，一个源一个文件
+│   ├── services/           业务层：搜索 / 追番 / 订阅 / 通知 / 调度 / Webhook / 体检
+│   ├── render/             6 主题 + 13 套 HTML 模板 + Pillow 兜底 + 降级引擎
+│   └── web/                管理页后端（29 条路由）与独立 Webhook 监听
+├── pages/nexus/            管理页前端（原生 JS，无构建步骤）
+├── tests/                  纯函数单测（标题归一化 / 季度换算 / RSS 解析 / 配置强转 …）
+└── assets/                 Logo、卡片预览图、管理页截图
+```
+
+几条内部约定，改代码前值得知道：
+
+- **服务层不依赖 AstrBot SDK。** `nexus/services/` 只接收一个 `Deps` 容器、只返回 `Reply` 对象，
+  由 `main.py` 翻译成消息链。所以服务层可以脱离 AstrBot 单独跑测试，`tests/` 里的用例就是这么干的。
+- **指令目录只有一份。** 帮助卡、管理页的指令表、README 里的指令表都从 `catalog.py` 生成，不会互相说谎。
+- **主题变量只有一份。** `render/themes.py` 里每个主题 28 个 CSS 变量，卡片模板和管理页样式表共用，
+  管理页的 `theme.css` 由 `scripts/build_theme_css.py` 生成。
+- **注释解释「为什么」，不解释「是什么」。** 代码本身应该已经说清楚做了什么。
+
+### 跑单测
+
+```bash
+pip install -r requirements-dev.txt
+python -m ruff format .
+python -m ruff check .
+python -m pytest
+```
+
+单测**完全离线**：需要 HTML 的用例都读 `tests/fixtures/` 下的静态样本，不会访问任何站点，
+所以断网、被墙、上游改版都不会让它变红。覆盖的是最容易悄悄坏掉的部分 —— 标题归一化与季度换算、
+RSS / Webhook 载荷解析、配置强转、SQLite 持久层、管理页 API，以及「帮助卡上的指令是否真的注册了」这类一致性检查。
+
+欢迎 issue 与 PR。报 bug 时请附上 `/番剧诊断` 的结果和相关日志片段。
+
+---
+
+## 许可证
+
+[AGPL-3.0-or-later](LICENSE)
+
+本项目衍生自上文列出的多个 AGPL/开源插件，因此同样以 AGPL-3.0-or-later 发布。
+如果你部署了修改版并对外提供服务，请按协议要求公开你的修改。
+
+<div align="center">
+
+**番剧中枢 · Bangumi Nexus**
+
+看番这件事，值得一个体面的工具。
+
+</div>

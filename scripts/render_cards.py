@@ -18,6 +18,8 @@ Licensed under the GNU Affero General Public License v3.0 or later.
 * 「assets/logo.png」 —— 透明背景位图，给 README / 插件市场用。
 * 「logo.png」（插件根目录）—— 满幅不透明图标。AstrBot 只认
   「<plugin_dir>/logo.png」 这一个路径，Dashboard 插件卡显示的就是它。
+* 「assets/logo.svg」 与 「pages/nexus/assets/logo.svg」 —— 矢量源，由
+  「nexus/render/logo.py」 直接导出，避免两份手抄件漂移。
 
 Chromium 通过 Playwright 驱动。由于自带的 headless-shell 经常和已安装的
 Playwright 版本不匹配，可以用 「--chromium」 或环境变量
@@ -34,6 +36,7 @@ import os
 import sys
 from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import Any
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 if str(PLUGIN_ROOT.parent) not in sys.path:
@@ -52,11 +55,26 @@ CARD_DIR = PLUGIN_ROOT / "assets" / "cards"
 LOGO_PNG = PLUGIN_ROOT / "assets" / "logo.png"
 #: AstrBot 解析插件 logo 时只看 「<plugin_dir>/logo.png」，别的路径都不认。
 ICON_PNG = PLUGIN_ROOT / "logo.png"
+#: 矢量 logo 的两个落点。README 引用前者，WebUI 页面引用后者，内容必须逐字一致，
+#: 所以统一从 「nexus/render/logo.py」 生成，不手改。
+LOGO_SVG_TARGETS = (
+    PLUGIN_ROOT / "assets" / "logo.svg",
+    PLUGIN_ROOT / "pages" / "nexus" / "assets" / "logo.svg",
+)
 
 TARGET_WIDTH = 1950
 WEBP_QUALITY = 88
 WEBP_METHOD = 6
-RENDER_SCALE = 2
+#: 截图时的设备像素比。成图最终都会被缩到 「TARGET_WIDTH」，所以这里只需要比目标
+#: 宽度略大一点就能拿到干净的抗锯齿；早先固定 2x 会让 Chromium 一次性合成
+#: 3120x4300 的全页位图，内存吃紧的机器上直接报 「Unable to capture screenshot」。
+RENDER_SCALE = 1.5
+#: 降级阶梯：请求的缩放失败时按顺序往下退，保证构建脚本在小内存机器上也能跑完。
+RENDER_SCALE_LADDER = (2.0, 1.5, 1.25, 1.0)
+#: 视口高度只影响首屏，全页截图会自己扩展；给个够高的值免得触发懒加载分支。
+VIEWPORT_HEIGHT = 1400
+#: 截图前的静置时间，留给 webfont 和渐变绘制。
+SETTLE_MS = 160
 LOGO_SIZE = 512
 
 CHROMIUM_ENV = "BANGUMI_NEXUS_CHROMIUM"
@@ -111,7 +129,13 @@ def _probe_chromium() -> str | None:
 
 
 def _encode_webp(png_bytes: bytes, destination: Path, *, target_width: int) -> int:
-    """把 2x 截图缩到目标宽度再压成 WebP —— 体积比 PNG 小一个数量级。"""
+    """把 2x 截图缩到目标宽度再压成 WebP —— 体积比 PNG 小一个数量级。
+
+    「reducing_gap」 让 Pillow 先用整数倍 「reduce()」 粗缩一遍再做 LANCZOS。
+    帮助卡在 2x 下是 3000x4300 级别的大图，直接 LANCZOS 需要一次性吃下几百 MB
+    浮点缓冲；本机在 Chromium 还开着的时候曾因此抛 「MemoryError」。粗缩一步既
+    省内存又更快，肉眼画质无差别。
+    """
 
     from PIL import Image
 
@@ -119,9 +143,10 @@ def _encode_webp(png_bytes: bytes, destination: Path, *, target_width: int) -> i
         image = raw.convert("RGB")
     if target_width and image.width > target_width:
         height = max(1, round(image.height * target_width / image.width))
-        image = image.resize((target_width, height), Image.LANCZOS)
+        image = image.resize((target_width, height), Image.LANCZOS, reducing_gap=2.0)
     destination.parent.mkdir(parents=True, exist_ok=True)
     image.save(destination, format="WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
+    image.close()
     return destination.stat().st_size
 
 
@@ -138,6 +163,70 @@ def _logo_html(svg: str, size: int) -> str:
     )
 
 
+def _sync_logo_svg() -> list[str]:
+    """把 「LOGO_SVG」 写到所有矢量落点。
+
+    早先这两份 svg 是手工复制的，改配色时漏掉一处就会出现 README 和 WebUI 里
+    logo 不一样的尴尬情况。这里让构建脚本兜住，源头只有 「logo.py」 一处。
+    """
+
+    report: list[str] = []
+    for target in LOGO_SVG_TARGETS:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # newline="\n" 是为了在 Windows 上也写出 LF，跟 「.gitattributes」 保持一致。
+        with target.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(LOGO_SVG)
+        label = target.relative_to(PLUGIN_ROOT).as_posix()
+        report.append(f"{label}: {len(LOGO_SVG)} B")
+    return report
+
+
+def _scale_ladder(preferred: float) -> tuple[float, ...]:
+    """把请求的缩放排在最前，后面接上比它更低的档位作为退路。"""
+
+    lower = tuple(value for value in RENDER_SCALE_LADDER if value < preferred)
+    return (preferred, *lower)
+
+
+async def _bake_card(
+    browser: Any,
+    html: str,
+    destination: Path,
+    *,
+    target_width: int,
+    ladder: Sequence[float],
+) -> tuple[int, float]:
+    """截图并编码一张帮助卡，返回 「(字节数, 实际缩放)」。
+
+    截图和编码放在同一个重试块里，是因为两处的失败原因是同一个——内存不够：
+    Chromium 合成不出大位图会抛 「Error: Unable to capture screenshot」，Pillow
+    缩放大图会抛 「MemoryError」。任一处炸了都降一档重来，比让整个构建挂掉好。
+    每张卡片用独立 context，跑完就关，峰值内存也更低。
+    """
+
+    from playwright.async_api import Error as PlaywrightError
+
+    last: BaseException | None = None
+    for scale in ladder:
+        context = await browser.new_context(
+            viewport={"width": HELP_CARD_WIDTH, "height": VIEWPORT_HEIGHT},
+            device_scale_factor=scale,
+        )
+        try:
+            page = await context.new_page()
+            await page.set_content(html, wait_until="load")
+            await page.wait_for_timeout(SETTLE_MS)
+            shot = await page.screenshot(type="png", full_page=True)
+            return _encode_webp(shot, destination, target_width=target_width), scale
+        except (MemoryError, PlaywrightError) as exc:
+            last = exc
+            print(f"  ! {destination.name} 在 {scale:g}x 下失败（{type(exc).__name__}），降档重试")
+        finally:
+            await context.close()
+    message = f"{destination.name}: 所有缩放档位都渲染失败"
+    raise RuntimeError(message) from last
+
+
 async def _render(
     keys: Sequence[str],
     *,
@@ -146,6 +235,7 @@ async def _render(
     version: str,
     columns: int,
     target_width: int,
+    scale: float,
     logo: bool,
 ) -> list[str]:
     """一次启动浏览器，串行渲染所有卡片和 logo。"""
@@ -160,11 +250,7 @@ async def _render(
     async with async_playwright() as driver:
         browser = await driver.chromium.launch(**launch_kwargs)
         try:
-            context = await browser.new_context(
-                viewport={"width": HELP_CARD_WIDTH, "height": 1400},
-                device_scale_factor=RENDER_SCALE,
-            )
-            page = await context.new_page()
+            ladder = _scale_ladder(scale)
             for key in keys:
                 theme = resolve_theme(key)
                 html = build_help_card(
@@ -174,13 +260,17 @@ async def _render(
                     width=HELP_CARD_WIDTH,
                     columns=columns,
                 )
-                await page.set_content(html, wait_until="load")
-                await page.wait_for_timeout(160)
-                shot = await page.screenshot(type="png", full_page=True)
                 destination = CARD_DIR / f"help_{theme.key}.webp"
-                size = _encode_webp(shot, destination, target_width=target_width)
-                report.append(f"{destination.name}: {size / 1024:.0f} KiB")
-            await context.close()
+                size, used = await _bake_card(
+                    browser,
+                    html,
+                    destination,
+                    target_width=target_width,
+                    ladder=ladder,
+                )
+                # 一旦降过档就别再往上试：六张卡的清晰度保持一致，看起来才像一套。
+                ladder = _scale_ladder(used)
+                report.append(f"{destination.name}: {size / 1024:.0f} KiB @{used:g}x")
 
             if logo:
                 logo_context = await browser.new_context(
@@ -245,7 +335,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=TARGET_WIDTH,
         help="输出宽度（像素，0 表示保留原始渲染尺寸）",
     )
-    parser.add_argument("--no-logo", action="store_true", help="跳过 logo.png / assets/logo.png")
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=RENDER_SCALE,
+        help=f"截图设备像素比（默认 {RENDER_SCALE:g}；失败会自动降档）",
+    )
+    parser.add_argument(
+        "--no-logo", action="store_true", help="跳过 logo.png / assets/logo.png / logo.svg"
+    )
     args = parser.parse_args(argv)
 
     chromium = args.chromium or _probe_chromium()
@@ -262,9 +360,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             version=args.version,
             columns=max(1, args.columns),
             target_width=max(0, args.width),
+            scale=max(1.0, args.scale),
             logo=not args.no_logo,
         )
     )
+    if not args.no_logo:
+        report.extend(_sync_logo_svg())
+
     for line in report:
         print("  " + line)
     return 0

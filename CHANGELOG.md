@@ -2,6 +2,24 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.0.1] - 2026-08-30
+
+### 变更
+
+- **Logo 重做为樱粉配色。** 五瓣樱花对应五路数据源向中枢汇聚，花心的播放三角是中枢本体，
+  外圈高亮弧与端点游标表示追番进度。配色取自 `sakura` 主题的强调色，和卡片、管理面板是同一套色谱。
+  同时 `logo.svg` 不再手工维护两份副本，改由构建脚本从 `nexus/render/logo.py` 统一导出，
+  彻底消除 README 与 WebUI 里 logo 不一致的可能。
+
+### 修复
+
+- **构建脚本在内存吃紧的机器上会崩。** 原先固定用 2 倍设备像素比截全页图，
+  Chromium 需要一次性合成 3120×4300 的位图，Pillow 缩放时还要再吃几百 MB 浮点缓冲，
+  内存不足时会抛 `Unable to capture screenshot` 或 `MemoryError`，整个构建直接失败。
+  现在默认降到 1.5 倍（成图仍统一缩到 1950 像素宽，肉眼无差别）、缩放走 `reducing_gap` 分两步、
+  每张卡片用独立浏览器上下文并即时释放；万一还是失败会沿 2.0 → 1.5 → 1.25 → 1.0 自动降档重试，
+  并且降档后不再回升，保证六张卡清晰度一致。新增 `--scale` 参数供内存充裕的机器手动拉高。
+
 ## [1.0.0] - 2026-08-30
 
 首个发布版本。番剧中枢把原先需要多个插件才能拼出来的番剧链路（查番 → 追番 → 订阅 → 播报）
@@ -60,4 +78,5 @@
 - `feedparser` 为可选依赖，缺失时走标准库解析，覆盖面略窄但可用。
 - 長門番堂（yuc.wiki）对未开播季度可能返回 404，此时自动回落 Bangumi。
 
+[1.0.1]: https://github.com/Whereis-Alice/astrbot_plugin_bangumi_nexus/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Whereis-Alice/astrbot_plugin_bangumi_nexus/releases/tag/v1.0.0

@@ -1,109 +1,96 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Bangumi Nexus">
   <defs>
     <linearGradient id="bnBase" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#12cdf5"/>
-      <stop offset=".38" stop-color="#4f7bff"/>
-      <stop offset=".74" stop-color="#a355ff"/>
-      <stop offset="1" stop-color="#ff5fb0"/>
+      <stop offset="0" stop-color="#ffc9b6"/>
+      <stop offset=".32" stop-color="#ff9dbe"/>
+      <stop offset=".66" stop-color="#ea5585"/>
+      <stop offset="1" stop-color="#b13d72"/>
     </linearGradient>
     <linearGradient id="bnSheen" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity=".32"/>
-      <stop offset=".54" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".34"/>
+      <stop offset=".56" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
-    <radialGradient id="bnGlow" cx=".5" cy=".45" r=".55">
-      <stop offset="0" stop-color="#ffffff" stop-opacity=".5"/>
-      <stop offset=".58" stop-color="#ffffff" stop-opacity=".07"/>
+    <radialGradient id="bnGlow" cx=".5" cy=".46" r=".56">
+      <stop offset="0" stop-color="#fff4f7" stop-opacity=".5"/>
+      <stop offset=".58" stop-color="#ffffff" stop-opacity=".08"/>
       <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="bnCore" x1=".1" y1="0" x2=".5" y2="1">
+    <linearGradient id="bnPetal" x1=".5" y1="0" x2=".5" y2="1">
       <stop offset="0" stop-color="#ffffff"/>
-      <stop offset=".62" stop-color="#f2f8ff"/>
-      <stop offset="1" stop-color="#d8e9ff"/>
+      <stop offset=".58" stop-color="#fff4f8"/>
+      <stop offset="1" stop-color="#ffcedd"/>
     </linearGradient>
-    <linearGradient id="bnPlay" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#1b2a6b"/>
-      <stop offset=".55" stop-color="#5433c8"/>
-      <stop offset="1" stop-color="#a02fb0"/>
+    <linearGradient id="bnCore" x1=".15" y1="0" x2=".85" y2="1">
+      <stop offset="0" stop-color="#f4638f"/>
+      <stop offset=".55" stop-color="#dc4576"/>
+      <stop offset="1" stop-color="#b23060"/>
     </linearGradient>
     <filter id="bnDrop" x="-40%" y="-40%" width="180%" height="180%">
-      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#0a0f2c" flood-opacity=".42"/>
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#7d2145" flood-opacity=".3"/>
     </filter>
     <filter id="bnSoft" x="-60%" y="-60%" width="220%" height="220%">
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0a0f2c" flood-opacity=".34"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#7d2145" flood-opacity=".32"/>
     </filter>
   </defs>
 
   <rect x="24" y="24" width="464" height="464" rx="116" fill="url(#bnBase)"/>
   <rect x="24" y="24" width="464" height="464" rx="116" fill="url(#bnSheen)"/>
-  <circle cx="256" cy="244" r="196" fill="url(#bnGlow)"/>
+  <circle cx="256" cy="252" r="200" fill="url(#bnGlow)"/>
 
-  <!-- 外圈轨道：两条同心细环 + 一段高亮弧（带彗尾端点），暗示数据持续汇入 -->
+  <!-- 追番进度环：淡轨 + 高亮弧 + 端点游标。端点即「当前追到第几话」 -->
   <g fill="none" stroke="#ffffff" stroke-linecap="round">
-    <circle cx="256" cy="244" r="164" stroke-opacity=".22" stroke-width="3"/>
-    <circle cx="256" cy="244" r="126" stroke-opacity=".26" stroke-width="2.5"/>
-    <path d="M132 136 A164 164 0 0 0 118 288" stroke-opacity=".9" stroke-width="9"/>
-    <path d="M392 356 A164 164 0 0 0 398 208" stroke-opacity=".62" stroke-width="8"/>
+    <circle cx="256" cy="252" r="198" stroke-opacity=".13" stroke-width="3"/>
+    <circle cx="256" cy="252" r="182" stroke-opacity=".24" stroke-width="11"/>
+    <path d="M 256 70 A 182 182 0 1 1 131 386" stroke-opacity=".95" stroke-width="11"/>
   </g>
-  <circle cx="118" cy="288" r="11" fill="#ffffff"/>
-
-  <!-- 汇聚线：四个源节点连向中枢，走对角方向以避开菱形轮廓 -->
-  <g stroke-linecap="round" fill="none">
-    <g stroke="#132049" stroke-opacity=".26" stroke-width="11">
-      <path d="M256 244 L167 155"/>
-      <path d="M256 244 L345 155"/>
-      <path d="M256 244 L167 333"/>
-      <path d="M256 244 L345 333"/>
-    </g>
-    <g stroke="#ffffff" stroke-opacity=".92" stroke-width="6">
-      <path d="M256 244 L167 155"/>
-      <path d="M256 244 L345 155"/>
-      <path d="M256 244 L167 333"/>
-      <path d="M256 244 L345 333"/>
-    </g>
-  </g>
-
-  <!-- 源节点 -->
   <g filter="url(#bnSoft)">
-    <g fill="#ffffff">
-      <circle cx="167" cy="155" r="22"/>
-      <circle cx="345" cy="155" r="18"/>
-      <circle cx="167" cy="333" r="17"/>
-      <circle cx="345" cy="333" r="20"/>
+    <circle cx="131" cy="386" r="14" fill="#ffffff"/>
+  </g>
+  <circle cx="131" cy="386" r="6" fill="url(#bnCore)"/>
+
+  <!-- 两片飘落的花瓣：填住四角留白，也让「樱」这个主题在缩略图里也站得住 -->
+  <g fill="#ffffff">
+    <g transform="translate(126 128) scale(.17) rotate(30)" fill-opacity=".6">
+      <path d="M 0 -36 C 18 -38 30 -46 36 -61 A 56 56 0 0 0 29.7 -151.5 C 20 -151 10 -146 0 -138 C -10 -146 -20 -151 -29.7 -151.5 A 56 56 0 0 0 -36 -61 C -30 -46 -18 -38 0 -36 Z"/>
+    </g>
+    <g transform="translate(396 396) scale(.145) rotate(-148)" fill-opacity=".48">
+      <path d="M 0 -36 C 18 -38 30 -46 36 -61 A 56 56 0 0 0 29.7 -151.5 C 20 -151 10 -146 0 -138 C -10 -146 -20 -151 -29.7 -151.5 A 56 56 0 0 0 -36 -61 C -30 -46 -18 -38 0 -36 Z"/>
     </g>
   </g>
-  <g fill="url(#bnPlay)">
-    <circle cx="167" cy="155" r="8.5"/>
-    <circle cx="345" cy="155" r="7"/>
-    <circle cx="167" cy="333" r="6.5"/>
-    <circle cx="345" cy="333" r="7.5"/>
-  </g>
 
-  <!-- 中枢核心：倒角菱形 + 播放三角 -->
+  <!-- 五瓣樱花＝五路数据源向中枢汇聚 -->
   <g filter="url(#bnDrop)">
-    <path d="M256 140 A26 26 0 0 1 274 148 L352 226 A26 26 0 0 1 352 262 L274 340
-             A26 26 0 0 1 238 340 L160 262 A26 26 0 0 1 160 226 L238 148
-             A26 26 0 0 1 256 140 Z" fill="url(#bnCore)"/>
-    <path d="M256 140 A26 26 0 0 1 274 148 L352 226 A26 26 0 0 1 352 262 L274 340
-             A26 26 0 0 1 238 340 L160 262 A26 26 0 0 1 160 226 L238 148
-             A26 26 0 0 1 256 140 Z" fill="none" stroke="#ffffff" stroke-opacity=".9" stroke-width="5"/>
-    <path d="M230 202 A9 9 0 0 1 244 194 L302 234 A12 12 0 0 1 302 254 L244 294
-             A9 9 0 0 1 230 286 Z" fill="url(#bnPlay)"/>
-  </g>
-
-  <!-- 底部进度条：暗示「追番进度」 -->
-  <g>
-    <rect x="146" y="404" width="220" height="22" rx="11" fill="#ffffff" fill-opacity=".34"/>
-    <rect x="146" y="404" width="220" height="22" rx="11" fill="none" stroke="#ffffff" stroke-opacity=".5" stroke-width="2"/>
-    <rect x="146" y="404" width="112" height="22" rx="11" fill="#ffffff" fill-opacity=".96"/>
-    <g filter="url(#bnSoft)">
-      <circle cx="258" cy="415" r="17" fill="#ffffff"/>
+    <g transform="translate(256 252) scale(.875)">
+      <g transform="rotate(0)">
+        <path d="M 0 -36 C 18 -38 30 -46 36 -61 A 56 56 0 0 0 29.7 -151.5 C 20 -151 10 -146 0 -138 C -10 -146 -20 -151 -29.7 -151.5 A 56 56 0 0 0 -36 -61 C -30 -46 -18 -38 0 -36 Z" fill="url(#bnPetal)"/>
+        <path d="M 0 -62 C 5 -90 5 -112 0 -128" fill="none" stroke="#e0547f" stroke-opacity=".15" stroke-width="5" stroke-linecap="round"/>
+      </g>
+      <g transform="rotate(72)">
+        <path d="M 0 -36 C 18 -38 30 -46 36 -61 A 56 56 0 0 0 29.7 -151.5 C 20 -151 10 -146 0 -138 C -10 -146 -20 -151 -29.7 -151.5 A 56 56 0 0 0 -36 -61 C -30 -46 -18 -38 0 -36 Z" fill="url(#bnPetal)"/>
+        <path d="M 0 -62 C 5 -90 5 -112 0 -128" fill="none" stroke="#e0547f" stroke-opacity=".15" stroke-width="5" stroke-linecap="round"/>
+      </g>
+      <g transform="rotate(144)">
+        <path d="M 0 -36 C 18 -38 30 -46 36 -61 A 56 56 0 0 0 29.7 -151.5 C 20 -151 10 -146 0 -138 C -10 -146 -20 -151 -29.7 -151.5 A 56 56 0 0 0 -36 -61 C -30 -46 -18 -38 0 -36 Z" fill="url(#bnPetal)"/>
+        <path d="M 0 -62 C 5 -90 5 -112 0 -128" fill="none" stroke="#e0547f" stroke-opacity=".15" stroke-width="5" stroke-linecap="round"/>
+      </g>
+      <g transform="rotate(216)">
+        <path d="M 0 -36 C 18 -38 30 -46 36 -61 A 56 56 0 0 0 29.7 -151.5 C 20 -151 10 -146 0 -138 C -10 -146 -20 -151 -29.7 -151.5 A 56 56 0 0 0 -36 -61 C -30 -46 -18 -38 0 -36 Z" fill="url(#bnPetal)"/>
+        <path d="M 0 -62 C 5 -90 5 -112 0 -128" fill="none" stroke="#e0547f" stroke-opacity=".15" stroke-width="5" stroke-linecap="round"/>
+      </g>
+      <g transform="rotate(288)">
+        <path d="M 0 -36 C 18 -38 30 -46 36 -61 A 56 56 0 0 0 29.7 -151.5 C 20 -151 10 -146 0 -138 C -10 -146 -20 -151 -29.7 -151.5 A 56 56 0 0 0 -36 -61 C -30 -46 -18 -38 0 -36 Z" fill="url(#bnPetal)"/>
+        <path d="M 0 -62 C 5 -90 5 -112 0 -128" fill="none" stroke="#e0547f" stroke-opacity=".15" stroke-width="5" stroke-linecap="round"/>
+      </g>
     </g>
-    <circle cx="258" cy="415" r="7.5" fill="url(#bnPlay)"/>
   </g>
 
-  <!-- 星芒 -->
-  <path d="M404 96 L413 126 L443 135 L413 144 L404 174 L395 144 L365 135 L395 126 Z"
-        fill="#ffffff" fill-opacity=".96"/>
-  <path d="M96 352 L101 368 L117 373 L101 378 L96 394 L91 378 L75 373 L91 368 Z"
-        fill="#ffffff" fill-opacity=".72"/>
+  <!-- 花心＝中枢：播放三角压在深樱色圆盘上，缩到 48px 也认得出是「看番」 -->
+  <circle cx="256" cy="252" r="58" fill="#ffffff" fill-opacity=".97"/>
+  <circle cx="256" cy="252" r="51" fill="url(#bnCore)"/>
+  <path d="M 236 227 A 10 10 0 0 1 250 220 L 292 245 A 11 11 0 0 1 292 259
+           L 250 284 A 10 10 0 0 1 236 277 Z" fill="#ffffff"/>
+
+  <!-- 星芒：右上角的一点闪光，避免大面积渐变显得空 -->
+  <path d="M 418 108 L 425 133 L 450 140 L 425 147 L 418 172 L 411 147 L 386 140 L 411 133 Z"
+        fill="#ffffff" fill-opacity=".88"/>
 </svg>

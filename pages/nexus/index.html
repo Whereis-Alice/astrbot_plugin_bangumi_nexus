@@ -105,6 +105,23 @@
   <p>正在连接 AstrBot…</p>
 </div>
 
+<!-- 自绘确认框：插件页跑在 sandbox iframe 里（AstrBot 给的是
+     「allow-scripts allow-forms allow-downloads」，没有 allow-modals），
+     window.confirm 会被浏览器直接判否而且什么都不弹，所以危险操作只能自己画。 -->
+<div class="askbox" id="askbox" hidden>
+  <div class="askbox-card" role="alertdialog" aria-modal="true" aria-labelledby="askbox-title" aria-describedby="askbox-body">
+    <div class="askbox-head">
+      <span class="askbox-mark" id="askbox-mark"><svg class="icon"><use href="#i-info"></use></svg></span>
+      <h2 id="askbox-title"></h2>
+    </div>
+    <p id="askbox-body"></p>
+    <div class="askbox-actions">
+      <button class="btn ghost" id="askbox-no" type="button"></button>
+      <button class="btn primary" id="askbox-yes" type="button"></button>
+    </div>
+  </div>
+</div>
+
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
 <script type="module" src="./app.js"></script>

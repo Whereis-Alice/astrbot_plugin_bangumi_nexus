@@ -1724,6 +1724,97 @@ table.cmd .c-alias {
   }
 }
 
+/* --- 自绘确认框 --------------------------------------------------------- */
+
+/* 沙箱 iframe 里 window.confirm 是个哑弹（点了等于选「取消」），
+   所以危险操作的二次确认必须走这套自绘层，层级压在启动幕之下、吐司之上。 */
+
+.askbox {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--canvas-from) 62%, transparent);
+  backdrop-filter: blur(6px);
+  animation: askbox-in 140ms ease;
+}
+
+.askbox[hidden] {
+  display: none;
+}
+
+.askbox-card {
+  width: min(420px, 100%);
+  padding: 20px 22px 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  background: var(--surface);
+  background-image: var(--surface-css);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  animation: askbox-pop 180ms cubic-bezier(0.2, 1.1, 0.4, 1);
+}
+
+.askbox-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.askbox-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 11px;
+  background: var(--chip);
+  color: var(--accent);
+}
+
+.askbox-mark.danger {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.askbox-card h2 {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: var(--heading-spacing);
+}
+
+.askbox-card p {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.askbox-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@keyframes askbox-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes askbox-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+}
+
 .boot {
   position: fixed;
   inset: 0;

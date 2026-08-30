@@ -164,6 +164,75 @@ function toast(message, kind = "info", ttl = 4200) {
   setTimeout(dismiss, ttl);
 }
 
+/**
+ * 危险操作的二次确认，返回 Promise<boolean>。
+ *
+ * 这里必须自绘，不能用 window.confirm：AstrBot 的插件页外壳给 iframe 的 sandbox
+ * 是 「allow-scripts allow-forms allow-downloads」，没有 「allow-modals」。
+ * 按规范，这种 iframe 里的 confirm 会被浏览器直接判为「取消」且不弹任何东西 ——
+ * 于是「删除订阅」这类按钮从用户视角看就是「点了完全没反应」。
+ * 支持 Esc 取消 / 回车确认 / 点遮罩取消，关掉后把焦点还给原来那个按钮。
+ */
+function ask(question, { title = "确认一下", yes = "确定", no = "取消", kind = "danger" } = {}) {
+  const host = $("#askbox");
+  const card = host && $(".askbox-card", host);
+  const btnYes = host && $("#askbox-yes", host);
+  const btnNo = host && $("#askbox-no", host);
+  // 骨架缺失（理论上不会）时宁可放行：按钮本身已经是一次明确的点击意图，
+  // 静默吞掉操作比少一次确认更难排查。
+  if (!host || !card || !btnYes || !btnNo) return Promise.resolve(true);
+  // 同一时刻只允许一个确认框，重复触发直接当作放弃，避免 resolve 悬空。
+  if (!host.hidden) return Promise.resolve(false);
+
+  const mark = $("#askbox-mark", host);
+  if (mark) mark.classList.toggle("danger", kind === "danger");
+  $("#askbox-title", host).textContent = title;
+  $("#askbox-body", host).textContent = question;
+  btnYes.textContent = yes;
+  btnNo.textContent = no;
+  btnYes.classList.toggle("danger", kind === "danger");
+  btnYes.classList.toggle("primary", kind !== "danger");
+
+  const opener = document.activeElement;
+  host.hidden = false;
+  btnYes.focus();
+
+  return new Promise((resolve) => {
+    const settle = (value) => {
+      host.hidden = true;
+      btnYes.removeEventListener("click", onYes);
+      btnNo.removeEventListener("click", onNo);
+      host.removeEventListener("mousedown", onBackdrop);
+      document.removeEventListener("keydown", onKey, true);
+      if (opener && typeof opener.focus === "function") opener.focus();
+      resolve(value);
+    };
+    const onYes = () => settle(true);
+    const onNo = () => settle(false);
+    // 只认落在遮罩本身的按下，避免卡片内拖选文字松手时被当成取消。
+    const onBackdrop = (event) => {
+      if (event.target === host) settle(false);
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        settle(false);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        settle(true);
+      } else if (event.key === "Tab") {
+        // 焦点锁在两个按钮之间，别让 Tab 跑到背后那一屏去。
+        event.preventDefault();
+        (document.activeElement === btnYes ? btnNo : btnYes).focus();
+      }
+    };
+    btnYes.addEventListener("click", onYes);
+    btnNo.addEventListener("click", onNo);
+    host.addEventListener("mousedown", onBackdrop);
+    document.addEventListener("keydown", onKey, true);
+  });
+}
+
 async function apiGet(endpoint, params) {
   return bridge.apiGet(endpoint, params);
 }
@@ -2076,6 +2145,12 @@ async function refreshOverview() {
   render();
 }
 
+/** 追番某一行的标题，用于确认框和回执文案；找不到就给个中性说法。 */
+function watchTitleOf(id) {
+  const row = (state.watch.items || []).find((item) => String(item.id) === String(id));
+  return row ? row.title : "这一条";
+}
+
 /** 追番清单的六个字段改动共用一条链路：写库 → 重拉 → 刷新徽标 → 重渲染。 */
 async function watchOp(op, id, value) {
   await apiPost("watchlist", { op, id, value });
@@ -2317,9 +2392,7 @@ const ACTIONS = {
   },
 
   "watch-delete": async (arg) => {
-    const row = (state.watch.items || []).find((item) => String(item.id) === String(arg));
-    const title = row ? row.title : "这一条";
-    if (!window.confirm("从追番清单里移除「" + title + "」？集数与评分会一起丢掉。")) return;
+    const title = watchTitleOf(arg);
     await watchOp("delete", arg);
     toast("已移除「" + title + "」", "ok");
   },
@@ -2382,19 +2455,13 @@ const ACTIONS = {
   "sub-enable-all": () => subOp("enable_all", {}, "已启用全部订阅"),
   "sub-disable-all": () => subOp("disable_all", {}, "已暂停全部订阅"),
 
-  "sub-clear": async () => {
-    if (!window.confirm("清空这个会话的全部订阅？去重历史也会一起删掉，且不可恢复。")) return;
-    await subOp("clear", {}, "已清空这个会话的订阅");
-  },
+  "sub-clear": () => subOp("clear", {}, "已清空这个会话的订阅"),
 
   "sub-toggle": (arg, node) => subOp("toggle", { id: Number(arg), enabled: !!node?.checked }),
 
   "sub-test-row": (arg) => subOp("test", { value: arg }),
 
-  "sub-remove": async (arg) => {
-    if (!window.confirm("删除订阅「" + arg + "」？它的去重历史也会一起清掉。")) return;
-    await subOp("remove", { value: arg });
-  },
+  "sub-remove": (arg) => subOp("remove", { value: arg }),
 
   "sub-add": async () => {
     const name = state.subDraft.name.trim();
@@ -2466,12 +2533,7 @@ const ACTIONS = {
 
   "exclude-save": () => saveExcludes(false),
 
-  "exclude-apply": async () => {
-    if (!window.confirm("把这份排除清单覆盖到该会话现有的每条订阅上？各条订阅原来单独设的排除词会被替换。")) {
-      return;
-    }
-    await saveExcludes(true);
-  },
+  "exclude-apply": () => saveExcludes(true),
 
   /* — 备份与迁移 — */
   "export-run": () => exportTo(state.umo),
@@ -2613,6 +2675,39 @@ const ACTIONS = {
 };
 
 /**
+ * 不可撤销操作的二次确认文案表：动作名 → 由参数生成的问法。
+ *
+ * 之所以把确认从 handler 里抽到这张表，是为了让 dispatch 能「先问、答应了才转圈」。
+ * 如果在 handler 内部 await 确认，按钮会在弹窗还开着的时候就一直转圈，
+ * 看着像已经在删了，用户反而不敢点「取消」。
+ */
+const CONFIRMS = {
+  "watch-delete": (arg) => ({
+    title: "移除「" + watchTitleOf(arg) + "」？",
+    body: "这一条的观看进度和评分会一起丢掉，之后重新加要从头记。",
+    yes: "移除",
+  }),
+
+  "sub-remove": (arg) => ({
+    title: "删除订阅「" + arg + "」？",
+    body: "它的去重历史也会一并清掉，以后重新订上会把最近几集当成新的再推一遍。",
+    yes: "删除",
+  }),
+
+  "sub-clear": () => ({
+    title: "清空这个会话的全部订阅？",
+    body: "这个会话下每一条订阅连同去重历史都会被删掉，无法恢复。",
+    yes: "全部清空",
+  }),
+
+  "exclude-apply": () => ({
+    title: "把排除词回写到现有的每条订阅？",
+    body: "各条订阅原先单独设过的排除词，会被这份清单整体替换掉。",
+    yes: "回写",
+  }),
+};
+
+/**
  * 统一分派。
  *
  * 只给 <button> 套转圈：下拉框和复选框被 disabled 一下会跳焦点、
@@ -2624,6 +2719,8 @@ async function dispatch(act, arg, node) {
     toast("这个按钮还没接上处理逻辑：" + act, "warn");
     return;
   }
+  const spec = CONFIRMS[act] ? CONFIRMS[act](arg) : null;
+  if (spec && !(await ask(spec.body, spec))) return;
   const busy = node && node.tagName === "BUTTON" ? node : null;
   await withBusy(busy, () => handler(arg, node));
 }

@@ -145,14 +145,19 @@ class TestParseBroadcast:
             2026, 7, 15, 13, tzinfo=UTC
         )
 
-    def test_local_fields_follow_local_timezone(self) -> None:
-        """周几 / 本地时间随运行机器时区变化，这里跟着实际时区推导，避免写死。"""
+    def test_display_fields_follow_japan_time(self) -> None:
+        """展示字段一律按日本时间，不跟运行机器的时区漂移。
+
+        写死期望值就是为了防止有人把它改回 「astimezone()」：放送表的星期
+        本来就按日本当地日期算，展示的钟点必须跟它同一个口径。
+        """
 
         broadcast = titles.parse_broadcast("R/2026-07-01T13:00:00.000Z/P7D")
         assert broadcast is not None
-        local = datetime(2026, 7, 1, 13, tzinfo=UTC).astimezone()
-        assert broadcast.weekday == local.isoweekday()
-        assert broadcast.local_time == local.strftime("%H:%M")
+        assert broadcast.air_weekday == 3  # UTC 周三 13:00 = 日本周三 22:00
+        assert broadcast.jst_time == "22:00"
+        assert broadcast.slot_label == "22:00"
+        assert broadcast.label() == "周三 22:00"
 
     def test_invalid(self) -> None:
         assert titles.parse_broadcast("") is None

@@ -133,17 +133,24 @@ class TestCoverMap:
 class TestBroadcastSlot:
     """放送时刻与星期归组。"""
 
-    def test_late_night_uses_24_hour_style(self) -> None:
-        """日本时间周日 01:30 = 北京时间周日 00:30，圈内写作 「24:30」。"""
+    def test_late_night_keeps_japan_clock(self) -> None:
+        """深夜档必须跟归组同口径：既然归到日本的周一，钟点也得写日本的 01:30。
+
+        锁这条是因为以前它按 Bot 本地时区写成 「24:30」，而归组用日本日期，
+        两边差一天 —— 卡片上就会出现「周一那栏写着周日深夜的时刻」。
+        """
 
         slot = parse_broadcast("R/2026-03-01T16:30:00Z/P7D")
         assert slot is not None
-        assert slot.slot_label == "24:30"
+        assert slot.slot_label == "深夜 01:30"
+        assert slot.jst_time == "01:30"
 
     def test_daytime_keeps_plain_clock(self) -> None:
+        """白天档不加前缀，直接给日本当地钟点。"""
+
         slot = parse_broadcast("R/2026-02-01T23:30:00Z/P7D")
         assert slot is not None
-        assert slot.slot_label == "07:30"
+        assert slot.slot_label == "08:30"
 
     def test_air_weekday_follows_japan(self) -> None:
         """归组必须用日本当地日期，跟 Bangumi 的 「air_weekday」 一个口径。"""
@@ -151,6 +158,8 @@ class TestBroadcastSlot:
         slot = parse_broadcast("R/2026-03-01T16:30:00Z/P7D")
         assert slot is not None
         assert slot.air_weekday == 1
+        # 「label」 的星期必须跟 「air_weekday」 指的是同一天，不能各说各话。
+        assert slot.label().startswith("周一")
 
     def test_rejects_garbage(self) -> None:
         assert parse_broadcast("每周日晚八点") is None

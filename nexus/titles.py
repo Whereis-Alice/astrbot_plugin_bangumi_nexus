@@ -268,12 +268,6 @@ class Broadcast:
     interval_days: int = 7
 
     @property
-    def weekday(self) -> int:
-        """1=周一 … 7=周日，按 Bot 本地时区换算。"""
-
-        return self.start.astimezone().isoweekday()
-
-    @property
     def air_weekday(self) -> int:
         """按日本放送日归组用的星期（1=周一 … 7=周日）。
 
@@ -284,26 +278,32 @@ class Broadcast:
         return self.start.astimezone(JST).isoweekday()
 
     @property
-    def local_time(self) -> str:
-        return self.start.astimezone().strftime("%H:%M")
+    def jst_time(self) -> str:
+        """日本当地放送时刻，「HH:MM」。"""
+
+        return self.start.astimezone(JST).strftime("%H:%M")
 
     @property
     def slot_label(self) -> str:
-        """「24:30」 风格的本地放送时刻。
+        """放送时刻，跟 「air_weekday」 同一个时区口径（日本当地）。
 
-        深夜档写成 「24:30」 而不是 「00:30」 是圈内惯例，
-        一眼能看出它属于前一天晚上那一档，比裸的 「00:30」 更不容易误读。
+        这里以前按 Bot 本地时区算、并把凌晨改写成 「24:xx」，跟按日本日期归组的
+        「air_weekday」 撞车了：日本时间周日 01:00 的番被归进「周日」那一栏，
+        标签却写成 「24:00」 —— 按圈内惯例这读作「周六深夜」，等于把同一场放送
+        说成了两个不同的日子，实际差了近 23 小时。所以显示与归组统一走日本时间，
+        不再改写钟点，只给凌晨档加「深夜」前缀提示它属于前一晚的档期。
         """
 
-        local = self.start.astimezone()
-        if local.hour < 5:
-            return f"{local.hour + 24}:{local.minute:02d}"
-        return f"{local.hour:02d}:{local.minute:02d}"
+        moment = self.start.astimezone(JST)
+        text = f"{moment.hour:02d}:{moment.minute:02d}"
+        return f"深夜 {text}" if moment.hour < 5 else text
 
     def label(self) -> str:
+        """「周日 01:00」 这样的一行，星期与钟点都按日本时间。"""
+
         from .constants import WEEKDAY_CN
 
-        return f"{WEEKDAY_CN[self.weekday - 1]} {self.local_time}"
+        return f"{WEEKDAY_CN[self.air_weekday - 1]} {self.jst_time}"
 
     def next_after(self, moment: datetime | None = None) -> datetime:
         """下一次放送时刻（含当下这一刻之后的第一次）。"""

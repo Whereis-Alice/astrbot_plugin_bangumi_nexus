@@ -101,7 +101,7 @@ SEARCH = Category(
         Command(
             "放送时间",
             "放送时间 <名称|条目ID>",
-            "下一集什么时候播、还差几天，按 Bot 本地时区换算。",
+            "下一集什么时候播、还差几天，放送时刻按日本时间。",
             origin="astrbot_plugin_bangumi",
         ),
         Command(

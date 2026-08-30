@@ -59,7 +59,7 @@ async def _ready(value: object) -> object:
 
 
 async def _air_times(deps: Deps, subjects: Sequence[Subject]) -> dict[int, str]:
-    """给一屏条目补放送时刻，「{条目 ID: 「24:30」 风格时刻}」。
+    """给一屏条目补放送时刻，「{条目 ID: 日本时间 「HH:MM」}」。
 
     Bangumi 的每日放送只给「星期几」，具体钟点在 bangumi-data 的 「broadcast」
     字段里。先 「warm」 一次把索引建好，再逐条 peek，避免每条各发一次请求。
@@ -461,7 +461,7 @@ class SearchService:
     # 放送时间 / 在线观看 / 萌娘百科
     # ------------------------------------------------------------------
     async def air_time(self, umo: str, query: str) -> Reply:
-        """下一集什么时候播 —— 带分集列表，时间按 Bot 本地时区换算。"""
+        """下一集什么时候播 —— 带分集列表，放送时刻按日本时间。"""
         deps = self._deps
         conf = deps.conf
         subject = await self.resolve(query)

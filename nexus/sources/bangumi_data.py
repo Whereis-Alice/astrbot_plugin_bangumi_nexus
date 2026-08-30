@@ -14,12 +14,32 @@ Licensed under the GNU Affero General Public License v3.0 or later.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..constants import BANGUMI_DATA_CDN, BANGUMI_DATA_RAW
 from ..http import FetchError, HttpClient
 from ..models import DataItem, SiteRef
-from ..titles import alias_keys, best_match, data_months, season_code, season_codes_around
+from ..titles import (
+    Broadcast,
+    alias_keys,
+    best_match,
+    data_months,
+    parse_broadcast,
+    parse_datetime,
+    season_code,
+    season_codes_around,
+)
+
+#: 只有连续剧集才谈得上「正在放送」，剧场版 / OVA 的 「begin」 是上映日，
+#: 放进放送表只会制造噪音。
+AIRING_TYPES = frozenset({"tv", "web"})
+
+#: 「end」 缺失时的兜底窗口。bangumi-data 对仍在连载的番常常留空 end，
+#: 但也有一批老条目是「忘了填」。年番满打满算 53 周，留到 400 天足够覆盖，
+#: 又不至于把几年前的僵尸条目一起捞上来。
+OPEN_ENDED_MAX_DAYS = 400
 
 #: 只有这些站点的链接对用户有意义，其余（字幕组内部 ID 等）不展示。
 WATCHABLE_SITES = (
@@ -97,6 +117,14 @@ def parse_item(raw: dict[str, Any]) -> DataItem:
         broadcast=str(raw.get("broadcast") or "").strip(),
         sites=tuple(sites),
     )
+
+
+def _slot_order(pair: tuple[DataItem, Broadcast]) -> tuple[int, int, str]:
+    """按「本地放送时刻」排序，同一时刻再按标题定序，保证输出稳定。"""
+
+    item, slot = pair
+    local = slot.start.astimezone()
+    return (local.hour, local.minute, item.title)
 
 
 class BangumiDataSource:
@@ -212,6 +240,79 @@ class BangumiDataSource:
             if label and ref.url:
                 links.append((label, ref.url))
         return tuple(links)
+
+    # -- 正在放送 -----------------------------------------------------------
+
+    def cached_by_bangumi_id(self, subject_id: int | str) -> DataItem | None:
+        """只查内存索引，不触发抓取。
+
+        给「批量给一屏条目补放送时间」这种场景用：调用方自己先 「warm」 一次，
+        然后逐条 peek，避免每条都去 「by_bangumi_id」 里各自 await 一遍。
+        """
+
+        wanted = str(subject_id).strip()
+        return self._bangumi_index.get(wanted) if wanted else None
+
+    def is_airing(self, item: DataItem, moment: datetime) -> bool:
+        """判断某条目在 「moment」 这一刻是否处于放送期。"""
+
+        if item.type not in AIRING_TYPES:
+            return False
+        begin = parse_datetime(item.begin)
+        if begin is None or begin > moment:
+            return False
+        end = parse_datetime(item.end)
+        if end is not None:
+            return end >= moment
+        return moment - begin <= timedelta(days=OPEN_ENDED_MAX_DAYS)
+
+    async def airing(
+        self,
+        *,
+        span: int = 2,
+        now: datetime | None = None,
+    ) -> tuple[tuple[DataItem, Broadcast], ...]:
+        """当下正在放送、且能解析出放送时刻的条目，按放送时间排序。
+
+        「span」 决定往前后各看几个季度。这里默认 2（共五季、十五个月分片），
+        因为年番 / 半年番的 「begin」 会落在两三个季度之前，只看当季必然漏掉。
+        """
+
+        await self.warm(span=span)
+        moment = now or datetime.now(UTC)
+        picked: dict[tuple[str, str], tuple[DataItem, Broadcast]] = {}
+        for items in self._by_month.values():
+            for item in items:
+                slot = parse_broadcast(item.broadcast)
+                if slot is None or not self.is_airing(item, moment):
+                    continue
+                # 同一部番可能被多个月份分片同时索引（跨季续播），按标题 + 开播日去重
+                picked.setdefault((item.title, item.begin), (item, slot))
+        return tuple(sorted(picked.values(), key=_slot_order))
+
+    async def long_running(
+        self,
+        *,
+        weekday: int,
+        exclude: Collection[str] = (),
+        span: int = 2,
+        now: datetime | None = None,
+    ) -> tuple[tuple[DataItem, Broadcast], ...]:
+        """指定星期正在放送、但 Bangumi 每日放送没收录的番。
+
+        为什么需要这一栏：「api.bgm.tv/calendar」 只返回**当季**新番，
+        年番 / 半年番开播一个季度之后就从那个接口里消失了，可用户还在追。
+        bangumi-data 带完整的 「begin」/「end」/「broadcast」，正好能把它们补回来。
+
+        「exclude」 传整周日历里出现过的 bangumi 条目 ID，避免同一部番两栏重复。
+        """
+
+        skip = {str(value).strip() for value in exclude if str(value).strip()}
+        return tuple(
+            (item, slot)
+            for item, slot in await self.airing(span=span, now=now)
+            if slot.air_weekday == weekday and item.bangumi_id not in skip
+        )
 
     def stats(self) -> dict[str, int]:
         return {

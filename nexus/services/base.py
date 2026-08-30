@@ -14,6 +14,7 @@ from typing import Any
 
 from ..activity import ActivityLog
 from ..config import NexusConfig
+from ..constants import COVER_HERO_EDGE, COVER_THUMB_EDGE
 from ..http import HttpClient
 from ..render import CardEngine, CardRequest, RenderedCard, plain_lines
 from ..sources.hub import SourceHub
@@ -56,10 +57,15 @@ class Reply:
 
     「card」 为空表示只发文字；两者都有时 main.py 会先发卡片图，
     文字作为图渲染彻底失败时的兜底。
+
+    「caption」 是跟在卡片图后面一起发的补充文本。卡片是图，图里的链接点不动，
+    所以「在线观看」这类需要用户点击的内容必须另外给一段纯文本。
+    它不参与「图渲染失败就退回文字」那套逻辑 —— 文字兜底本身已经带上了。
     """
 
     text: str = ""
     card: CardRequest | None = None
+    caption: str = ""
     notes: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
@@ -129,31 +135,38 @@ async def template_for(deps: Deps, umo: str) -> str:
     return value if value in {"1", "2", "3"} else "1"
 
 
-async def cover_uri(deps: Deps, url: str) -> str:
+async def cover_uri(deps: Deps, url: str, *, max_edge: int = COVER_HERO_EDGE) -> str:
     """封面转 base64 data URI。
 
     远端渲染服务不一定能直连 bgm 的图床（也不一定有代理），
-    所以图片一律由插件自己下好、内联进 HTML。
+    所以图片一律由插件自己下好、内联进 HTML；同时按 「max_edge」 瘦身，
+    否则内联体积会把渲染服务撑爆。
     """
     if not url:
         return ""
     try:
-        return await deps.http.data_uri(url)
+        return await deps.http.data_uri(url, max_edge=max_edge)
     except Exception:  # noqa: BLE001
         return ""
 
 
-async def cover_map(deps: Deps, pairs: Iterable[tuple[Any, str]]) -> dict[Any, str]:
-    """批量取封面，返回 「{key: data_uri}」，失败的键直接缺席。"""
+async def cover_map(
+    deps: Deps,
+    pairs: Iterable[tuple[Any, str]],
+    *,
+    max_edge: int = COVER_THUMB_EDGE,
+) -> dict[Any, str]:
+    """批量取封面，返回 「{业务键: data_uri}」，失败的键直接缺席。
+
+    「data_uris」 返回的是以**原始 URL**为键的字典，所以这里必须按 URL 反查，
+    不能拿它跟 「wanted」 做 zip —— 那样拿到的是 URL 本身，
+    卡片里就会出现一堆远端地址，渲染服务取不到图，整卡退化成首字占位块。
+    """
     wanted = [(key, url) for key, url in pairs if url]
     if not wanted:
         return {}
-    uris = await deps.http.data_uris([url for _, url in wanted])
-    result: dict[Any, str] = {}
-    for (key, _), uri in zip(wanted, uris, strict=False):
-        if uri:
-            result[key] = uri
-    return result
+    uris = await deps.http.data_uris([url for _, url in wanted], max_edge=max_edge)
+    return {key: uris[url] for key, url in wanted if uris.get(url)}
 
 
 async def llm_text(

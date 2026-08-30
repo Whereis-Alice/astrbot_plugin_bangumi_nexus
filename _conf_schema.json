@@ -92,6 +92,12 @@
     "hint": "超过 200 字或含多行的回复改用图片发送，避免刷屏。",
     "default": true
   },
+  "show_watch_text": {
+    "description": "卡片附带可点击的在线观看链接",
+    "type": "bool",
+    "hint": "卡片是图片，图里的链接点不动。开启后会在卡片下面再发一小段纯文本链接，方便直接点开。关掉则只发图。",
+    "default": true
+  },
   "push_enabled": {
     "description": "启用每日新番播报",
     "type": "bool",

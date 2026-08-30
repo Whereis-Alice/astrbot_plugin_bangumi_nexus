@@ -14,7 +14,7 @@ import re
 import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Any, TypeVar
 
@@ -254,6 +254,12 @@ def parse_datetime(text: str) -> datetime | None:
     return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment
 
 
+#: 日本标准时间。放送表的「星期几」在业界一律按日本当地日期算，
+#: Bangumi 的 「air_weekday」 也是这个口径，所以归组必须用它，
+#: 不能用 Bot 所在时区 —— 否则同一部深夜番会在两个星期里各出现一次。
+JST = timezone(timedelta(hours=9), "JST")
+
+
 @dataclass(frozen=True)
 class Broadcast:
     """一条重复放送规则。"""
@@ -268,8 +274,31 @@ class Broadcast:
         return self.start.astimezone().isoweekday()
 
     @property
+    def air_weekday(self) -> int:
+        """按日本放送日归组用的星期（1=周一 … 7=周日）。
+
+        跟 Bangumi 每日放送的口径对齐，深夜档**不**归到前一天：
+        日本时间周日 00:30 的番算周日，不算周六。
+        """
+
+        return self.start.astimezone(JST).isoweekday()
+
+    @property
     def local_time(self) -> str:
         return self.start.astimezone().strftime("%H:%M")
+
+    @property
+    def slot_label(self) -> str:
+        """「24:30」 风格的本地放送时刻。
+
+        深夜档写成 「24:30」 而不是 「00:30」 是圈内惯例，
+        一眼能看出它属于前一天晚上那一档，比裸的 「00:30」 更不容易误读。
+        """
+
+        local = self.start.astimezone()
+        if local.hour < 5:
+            return f"{local.hour + 24}:{local.minute:02d}"
+        return f"{local.hour:02d}:{local.minute:02d}"
 
     def label(self) -> str:
         from .constants import WEEKDAY_CN

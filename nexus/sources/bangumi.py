@@ -1,8 +1,12 @@
 """Bangumi 番组计划（bgm.tv）适配器。
 
-覆盖每日放送、条目详情、搜索与分集列表。搜索优先走 v0 的 POST 接口（支持按类型
-过滤、返回字段更全），失败时自动退回旧版 GET 接口 —— 旧接口偶尔比新接口更命中，
-两条路都留着比只留一条稳。
+覆盖每日放送、条目详情、搜索、分集列表，以及制作阵容与主要声优。搜索优先走 v0 的
+POST 接口（支持按类型过滤、返回字段更全），失败时自动退回旧版 GET 接口 —— 旧接口
+偶尔比新接口更命中，两条路都留着比只留一条稳。
+
+制作阵容特意从条目自带的 「infobox」 里提，而不是另外调 「/persons」：
+「/persons」 一部长番能返回四百多条（连「转场绘」「制作进行」都算），既慢又没法直接
+展示；「infobox」 是官方整理过的、按角色归好类的文本，一次条目请求就顺带拿到了。
 
 Copyright (C) 2026 Whereis-Alice and AstrBot Plugin Authors.
 Licensed under the GNU Affero General Public License v3.0 or later.
@@ -11,6 +15,7 @@ Licensed under the GNU Affero General Public License v3.0 or later.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from ..constants import BANGUMI_API, BANGUMI_SITE
@@ -37,6 +42,29 @@ TYPE_ALIASES: dict[str, int] = {
 _TAG_BLOCKLIST = frozenset(
     {"tv", "日本", "動畫", "动画", "アニメ", "2026", "2025", "2027", "漫画改", "轻小说改"}
 )
+
+#: 「展示标签 -> infobox 候选键」。同一个岗位在不同条目里写法不统一
+#: （监督 / 総監督 / 系列监督 / シリーズ監督 都出现过），所以按优先级列一串，
+#: 取第一个命中的即可；顺序也决定了卡片上的行序，从「谁做的」到「怎么做的」。
+STAFF_LABELS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("原作", ("原作",)),
+    ("导演", ("导演", "監督", "监督", "总导演", "総監督", "系列监督", "シリーズ監督")),
+    ("动画制作", ("动画制作", "アニメーション制作", "製作", "制作")),
+    ("系列构成", ("系列构成", "シリーズ構成", "脚本")),
+    ("人物设定", ("人物设定", "キャラクターデザイン", "角色设计")),
+    ("总作画监督", ("总作画监督", "総作画監督", "作画监督")),
+    ("美术监督", ("美术监督", "美術監督")),
+    ("音乐", ("音乐", "音楽")),
+)
+
+#: 「/characters」 里的 「relation」。只展示前两种：客串角色跟本作阵容无关，
+#: 混进来会把真正的主角挤出榜（柯南就出现在《名侦探光之美少女！》的客串位）。
+CAST_RELATIONS: tuple[str, ...] = ("主角", "配角")
+
+#: infobox 里常见的「主美术：」「制片人辅佐：」这类岗位前缀，展示时是噪音。
+_STAFF_PREFIX_RE = re.compile(r"^[^：:]{1,12}[：:]")
+#: 人名分隔符：中日文顿号、全角逗号、斜杠、半角逗号都出现过。
+_STAFF_SPLIT_RE = re.compile(r"[、,，/／]")
 
 
 def _clean_summary(text: str, limit: int = 320) -> str:
@@ -100,6 +128,90 @@ def _image(images: Any) -> str:
     if isinstance(images, str) and images.strip():
         return images.strip()
     return ""
+
+
+def staff_from_infobox(
+    infobox: Mapping[str, str],
+) -> tuple[tuple[tuple[str, str], ...], str]:
+    """从 「infobox」 里挑出适合上卡片的制作阵容，顺带返回动画制作公司。
+
+    为什么要裁剪：infobox 原文经常是 「主美术：濱野英次」 或
+    「田中昂 (ABCアニメーション)、矢﨑史 (ADKエモーションズ)」 这种带前缀、带括号、
+    十几个人并列的长串。卡片一行放不下，全塞进去反而什么都读不到，
+    所以统一「去掉冒号前缀 → 只留前三个人名 → 单行截断」。
+
+    返回 「(阵容行, 动画制作)」：动画制作要单独拎出来，因为它同时被用作卡片副标题。
+    """
+    rows: list[tuple[str, str]] = []
+    studio = ""
+    for label, keys in STAFF_LABELS:
+        value = ""
+        for key in keys:
+            value = str(infobox.get(key) or "").strip()
+            if value:
+                break
+        if not value:
+            continue
+        cleaned = _trim_staff(value)
+        if not cleaned:
+            continue
+        if label == "动画制作" and not studio:
+            studio = cleaned
+        rows.append((label, cleaned))
+    return tuple(rows), studio
+
+
+def _trim_staff(value: str) -> str:
+    """把 infobox 里一格制作信息压成一行能读的短文本。"""
+
+    text = _STAFF_PREFIX_RE.sub("", value.replace("\n", "、").strip())
+    names = [part.strip() for part in _STAFF_SPLIT_RE.split(text) if part.strip()]
+    if not names:
+        return ""
+    head = "、".join(names[:3])
+    if len(names) > 3:
+        head += f" 等 {len(names)} 人"
+    return head[:80]
+
+
+def cast_from_characters(raw: Any, *, limit: int = 8) -> tuple[tuple[tuple[str, str], ...], str]:
+    """把 「/v0/subjects/{id}/characters」 收敛成 「(角色, 声优)」 列表。
+
+    按 「CAST_RELATIONS」 的顺序分组输出而不是保持原序：接口返回的顺序里
+    客串角色可能排在最前面，直接截前 8 条会把主角截掉。
+    同一位声优兼多角时也只留第一次出现，避免整块看起来像复读。
+
+    返回 「(列表, 主角数量描述)」，第二项直接给卡片当角标用。
+    """
+    buckets: dict[str, list[tuple[str, str]]] = {name: [] for name in CAST_RELATIONS}
+    total = 0
+    for item in raw or ():
+        if not isinstance(item, dict):
+            continue
+        relation = str(item.get("relation") or "").strip()
+        if relation not in buckets:
+            continue
+        name = str(item.get("name") or "").strip()
+        actors = item.get("actors") or ()
+        voice = ""
+        for actor in actors:
+            if isinstance(actor, dict):
+                voice = str(actor.get("name") or "").strip()
+                if voice:
+                    break
+        if not name or not voice:
+            continue
+        total += 1
+        buckets[relation].append((name, voice))
+    ordered: list[tuple[str, str]] = []
+    seen_voice: set[str] = set()
+    for relation in CAST_RELATIONS:
+        for name, voice in buckets[relation]:
+            if voice in seen_voice:
+                continue
+            seen_voice.add(voice)
+            ordered.append((name, voice))
+    return tuple(ordered[: max(1, limit)]), f"{total} 位" if total else ""
 
 
 def parse_subject(raw: dict[str, Any]) -> Subject:
@@ -242,6 +354,23 @@ class BangumiSource:
         return [parse_subject(item) for item in raw.get("list") or () if isinstance(item, dict)][
             :limit
         ]
+
+    async def characters(self, subject_id: int, *, limit: int = 8) -> tuple[tuple[str, str], str]:
+        """主要角色与声优。失败返回空，卡片自己少一栏就好，不该整张查番失败。
+
+        缓存键不带 「limit」：接口一次就把全部角色返回了，裁剪是本地做的，
+        换个 「limit」 再打一次请求纯属浪费。
+        """
+        try:
+            raw = await self._http.fetch_json(
+                f"{BANGUMI_API}/v0/subjects/{int(subject_id)}/characters",
+                headers=self._headers(),
+                cache_key=f"bgm:chars:{subject_id}",
+                ttl=6 * 3600,
+            )
+        except FetchError:
+            return (), ""
+        return cast_from_characters(raw, limit=limit)
 
     async def episodes(self, subject_id: int, *, limit: int = 100) -> list[Episode]:
         """正片分集（type=0）。"""

@@ -158,6 +158,7 @@ class NexusConfig:
     translate_summary: bool = False
     translate_provider_id: str = ""
     long_reply_as_card: bool = True
+    show_watch_text: bool = True
     # 每日播报
     push_enabled: bool = False
     push_times: tuple[str, ...] = ("08:30",)
@@ -253,6 +254,7 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
         translate_summary=_as_bool(_get(raw, "translate_summary", False), False),
         translate_provider_id=_as_str(_get(raw, "translate_provider_id", "")),
         long_reply_as_card=_as_bool(_get(raw, "long_reply_as_card", True), True),
+        show_watch_text=_as_bool(_get(raw, "show_watch_text", True), True),
         push_enabled=_as_bool(_get(raw, "push_enabled", False), False),
         push_times=parse_times(_get(raw, "push_time", "08:30")),
         push_targets=_as_list(_get(raw, "push_targets", ())),

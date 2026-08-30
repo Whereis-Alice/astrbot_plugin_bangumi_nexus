@@ -489,6 +489,8 @@ class BangumiNexusPlugin(Star):
         if reply.card is not None:
             card = await self._engine.render(reply.card, conf)
             if card.has_image:
+                # 卡片补充文本只在真出图时才追加：退回纯文本时 「reply.text」 里已经有了
+                tail = "\n\n".join(part for part in (self._clean(reply.caption), tail) if part)
                 chain: list[Any] = [self._image_component(card.image_path or card.image_url)]
                 if tail:
                     chain.append(Comp.Plain("\n" + tail))

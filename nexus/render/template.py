@@ -98,8 +98,7 @@ def paragraphs(text: str, limit: int = 3) -> tuple[str, ...]:
 
 _CSS = """
 *{margin:0;padding:0;box-sizing:border-box}
-html{background:var(--canvas-to)}
-body{background:transparent}
+html,body{background:transparent}
 body{width:__WIDTH__px;font-family:var(--font-body);-webkit-font-smoothing:antialiased}
 .canvas{position:relative;width:__WIDTH__px;padding:32px;background:var(--canvas);overflow:hidden}
 .canvas>.veil{position:absolute;inset:0;background:var(--overlay);opacity:.9;pointer-events:none}
@@ -407,6 +406,37 @@ def _kv(pairs: Sequence[tuple[str, str]]) -> str:
     return f'<dl class="kv">{"".join(rows)}</dl>' if rows else ""
 
 
+def _dedupe_facts(pairs: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
+    """去空、按键去重、单行截断。同一个键可能被多个数据源各填一次，先到先得。"""
+
+    seen: set[str] = set()
+    result: list[tuple[str, str]] = []
+    for key, value in pairs:
+        text = str(value or "").strip()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        result.append((key, clip(text, 96)))
+    return result
+
+
+def _merge_staff(
+    primary: Sequence[tuple[str, str]],
+    fallback: Sequence[tuple[str, str]],
+    *,
+    limit: int = 8,
+) -> list[tuple[str, str]]:
+    """人工整理过的阵容优先，缺的岗位再用兜底数据补。
+
+    不做「同岗位取更长的那个」这种聪明合并：两边写法不同（一边中文岗位名、
+    一边日文原文），拼在一起只会自相矛盾，认准一个来源更可信。
+    """
+    merged = _dedupe_facts(primary)
+    have = {key for key, _ in merged}
+    merged.extend(pair for pair in _dedupe_facts(fallback) if pair[0] not in have)
+    return merged[: max(1, limit)]
+
+
 def _links(items: Sequence[tuple[str, str]]) -> str:
     cards = [
         f'<div class="link"><b>{esc(name)}</b><span>{esc(url)}</span></div>'
@@ -694,9 +724,18 @@ def build_subject_card(
     next_air: str = "",
     watch_links: Sequence[tuple[str, str]] = (),
     summary_override: str = "",
+    staff: Sequence[tuple[str, str]] = (),
+    cast: Sequence[tuple[str, str]] = (),
+    cast_hint: str = "",
     version: str = "",
 ) -> str:
-    """跨源聚合详情卡：Bangumi 打底，長門番堂补制作与声优，其余源补观看入口。"""
+    """跨源聚合详情卡：Bangumi 打底，長門番堂补制作与声优，其余源补观看入口。
+
+    「staff」「cast」 是调用方从 Bangumi 的 「infobox」/「characters」 备好的兜底数据。
+    長門番堂只有当季页面，年番、旧番、以及该站临时挂掉时都拿不到阵容 ——
+    此前这两栏就直接空着，看起来像插件坏了。有兜底之后卡片永远是满的，
+    而長門番堂在线时仍然优先用它（人工整理过，岗位名统一）。
+    """
 
     resolved = theme if isinstance(theme, Theme) else resolve_theme(theme)
     subject = match.subject
@@ -718,8 +757,6 @@ def build_subject_card(
             chips.append(_chip(f"{subject.eps} 话", variant="mono"))
     if next_air:
         chips.append(_chip(next_air, variant="solid"))
-    for source in match.matched_sources():
-        chips.append(_chip(source, variant="ghost"))
 
     title = match.title
     alt = ""
@@ -741,27 +778,20 @@ def build_subject_card(
     intro = '<div class="tile plain">' + _thumb(cover, title, size="lg")
     facts: list[tuple[str, str]] = []
     if season:
-        facts.append(("原作", season.staff_of("原作")))
-        facts.append(("导演", season.staff_of("导演", "監督", "监督")))
-        facts.append(("动画制作", season.studio))
         facts.append(("题材", " / ".join(season.genres[:6])))
         facts.append(("首播", season.broadcast))
     if subject:
         facts.append(("放送", f"{subject.weekday_label} {subject.air_date}".strip()))
+        if subject.eps:
+            facts.append(("话数", f"{subject.eps} 话"))
         facts.append(("Bangumi", subject.url or f"https://bgm.tv/subject/{subject.id}"))
     if match.data_item and match.data_item.official_site:
         facts.append(("官网", match.data_item.official_site))
+    elif subject and subject.infobox.get("官方网站"):
+        facts.append(("官网", subject.infobox["官方网站"]))
     if match.moegirl:
         facts.append(("萌娘百科", match.moegirl.url))
-    seen: set[str] = set()
-    unique_facts = []
-    for key, value in facts:
-        text = str(value or "").strip()
-        if not text or key in seen:
-            continue
-        seen.add(key)
-        unique_facts.append((key, clip(text, 96)))
-    intro += '<div class="tile-main">' + _kv(unique_facts)
+    intro += '<div class="tile-main">' + _kv(_dedupe_facts(facts))
     summary = summary_override or (subject.summary if subject else "")
     if summary:
         blurbs = paragraphs(summary, 3)
@@ -770,12 +800,36 @@ def build_subject_card(
     intro += "</div></div>"
     blocks.append(_block("条目信息", intro, hint=f"bgm {subject.id}" if subject else ""))
 
-    if season and season.cast:
+    season_staff = (
+        [
+            ("原作", season.staff_of("原作")),
+            ("导演", season.staff_of("导演", "監督", "监督")),
+            ("动画制作", season.studio),
+            ("系列构成", season.staff_of("系列构成", "シリーズ構成", "脚本")),
+            ("人物设定", season.staff_of("人物设定", "角色设计", "キャラクターデザイン")),
+            ("音乐", season.staff_of("音乐", "音楽")),
+        ]
+        if season
+        else []
+    )
+    staff_rows = _merge_staff(season_staff, staff)
+    if staff_rows:
+        blocks.append(
+            _block(
+                "制作阵容",
+                _kv(staff_rows),
+                hint="長門番堂 / bgm" if season else "bgm infobox",
+            )
+        )
+
+    cast_pairs = list(season.cast) if season and season.cast else list(cast)
+    if cast_pairs:
         cast_rows = [
             (str(index), clip(role, 30), clip(voice, 30), "")
-            for index, (role, voice) in enumerate(season.cast[:8], start=1)
+            for index, (role, voice) in enumerate(cast_pairs[:8], start=1)
         ]
-        blocks.append(_block("主要声优", _rows(cast_rows), hint=f"{len(season.cast)} 位"))
+        hint = f"{len(season.cast)} 位" if season and season.cast else cast_hint
+        blocks.append(_block("主要声优", _rows(cast_rows), hint=hint))
 
     if subject and subject.tags:
         blocks.append(_block("标签", _chips(subject.tags[:14]), hint="按热度"))
@@ -786,8 +840,8 @@ def build_subject_card(
     body = f'<div class="body">{"".join(blocks)}</div>'
     footer = _footer(
         "番剧中枢",
-        "已匹配 " + (" / ".join(match.matched_sources()) or "\u2014"),
-        (f"置信度 {match.confidence:.0%}", version) if version else (),
+        f"置信度 {match.confidence:.0%}" if match.confidence else "跨源聚合",
+        (version,) if version else (),
     )
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="SUBJECT"))
 

@@ -8,7 +8,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Mapping, Sequence
 
 from ..constants import WEEKDAY_CN
 from ..models import CalendarDay, MatchResult, Subject
@@ -23,8 +24,8 @@ from ..render import (
     clip,
     flatten,
 )
-from ..sources.bangumi import TYPE_ANIME, TYPE_BOOK, is_movie
-from ..titles import season_code, season_label
+from ..sources.bangumi import TYPE_ANIME, TYPE_BOOK, is_movie, staff_from_infobox
+from ..titles import parse_broadcast, season_code, season_label
 from .base import (
     Deps,
     Reply,
@@ -40,6 +41,84 @@ from .base import (
 
 TRANSLATE_PROMPT = "把下面的日文动画简介翻译成简体中文，只输出译文，不要解释：\n\n"
 SEASON_TYPES = {"tv", "web"}
+
+#: 捞长期连载时往前后各看几个季度。年番的 「begin」 最远能落在三个季度前，
+#: 2 表示一共五季、十五个月分片，覆盖到位又不至于把索引撑得太大。
+LONG_RUN_SPAN = 2
+
+#: 「长期连载」 那一栏最多显示几部。这一栏是补充，不该抢当季新番的版面。
+LONG_RUN_LIMIT = 6
+
+
+async def _ready(value: object) -> object:
+    """把已有结果包成协程，好让它和真正的请求一起进 「asyncio.gather」。
+
+    比写两套分支（有跨源 / 无跨源各 gather 一次）短得多，代价只是一次事件循环切换。
+    """
+    return value
+
+
+async def _air_times(deps: Deps, subjects: Sequence[Subject]) -> dict[int, str]:
+    """给一屏条目补放送时刻，「{条目 ID: 「24:30」 风格时刻}」。
+
+    Bangumi 的每日放送只给「星期几」，具体钟点在 bangumi-data 的 「broadcast」
+    字段里。先 「warm」 一次把索引建好，再逐条 peek，避免每条各发一次请求。
+    """
+
+    if not subjects:
+        return {}
+    try:
+        await deps.hub.bangumi_data.warm(span=LONG_RUN_SPAN)
+    except Exception:  # noqa: BLE001 - 补时刻是增益信息，抓不到就不显示
+        return {}
+    result: dict[int, str] = {}
+    for subject in subjects:
+        item = deps.hub.bangumi_data.cached_by_bangumi_id(subject.id)
+        if item is None:
+            continue
+        slot = parse_broadcast(item.broadcast)
+        if slot is not None:
+            result[subject.id] = slot.slot_label
+    return result
+
+
+async def _long_running(
+    deps: Deps,
+    *,
+    weekday: int,
+    days: Sequence[CalendarDay],
+    limit: int,
+) -> tuple[tuple[Subject, str], ...]:
+    """今天在播、但每日放送接口没收录的年番 / 半年番。
+
+    「api.bgm.tv/calendar」 只返回当季新番，年番开播一个季度之后就从里面消失，
+    用户却还在追它 —— 所以用 bangumi-data 的 「begin/end/broadcast」 把这批捞回来，
+    再回查 Bangumi 详情补上封面和评分，好让它跟当季那一栏长得一样。
+
+    「days」 传整周日历（不只今天），这样任何一天已经收录过的条目都不会重复出现。
+    """
+
+    if limit <= 0:
+        return ()
+    known = {str(subject.id) for day in days for subject in day.items}
+    try:
+        pairs = await deps.hub.bangumi_data.long_running(
+            weekday=weekday, exclude=known, span=LONG_RUN_SPAN
+        )
+    except Exception:  # noqa: BLE001 - 这一栏是补充，挂了不该拖垮整张卡
+        return ()
+    wanted = [(item, slot) for item, slot in pairs if item.bangumi_id][:limit]
+    if not wanted:
+        return ()
+    fetched = await asyncio.gather(
+        *(deps.hub.bangumi.subject(int(item.bangumi_id)) for item, _ in wanted),
+        return_exceptions=True,
+    )
+    result: list[tuple[Subject, str]] = []
+    for (_, slot), subject in zip(wanted, fetched, strict=False):
+        if isinstance(subject, Subject):
+            result.append((subject, slot.slot_label))
+    return tuple(result)
 
 
 class SearchService:
@@ -151,28 +230,49 @@ class SearchService:
         if subject is None:
             return Reply.plain("没找到这部作品，确认下名字或者直接给条目 ID。")
 
-        match = (
-            await deps.matcher.enrich(subject, include_moegirl=include_moegirl)
+        # 跨源聚合、主题、封面、声优、简介互不依赖，一起发出去省掉三四秒串行等待
+        match_task = (
+            deps.matcher.enrich(subject, include_moegirl=include_moegirl)
             if conf.enable_cross_match
-            else MatchResult(subject=subject, confidence=1.0)
+            else None
         )
-        theme, _ = await style_for(deps, umo)
-        cover = await cover_uri(deps, subject.image)
-        summary = await self._summary(subject, umo)
+        match, (cast, cast_hint), theme_pair, cover, summary = await asyncio.gather(
+            match_task
+            if match_task is not None
+            else _ready(MatchResult(subject=subject, confidence=1.0)),
+            deps.hub.bangumi.characters(subject.id),
+            style_for(deps, umo),
+            cover_uri(deps, subject.image),
+            self._summary(subject, umo),
+        )
+        theme, _ = theme_pair
+        staff, _studio = staff_from_infobox(subject.infobox)
+        next_air = deps.matcher.next_air_label(match)
+        links = deps.matcher.watch_links(match)
         html = build_subject_card(
             theme,
             match,
             width=conf.card_width,
             cover=cover,
-            next_air=deps.matcher.next_air_label(match),
-            watch_links=deps.matcher.watch_links(match),
+            next_air=next_air,
+            watch_links=links,
             summary_override=summary,
+            staff=staff,
+            cast=cast,
+            cast_hint=cast_hint,
+        )
+        plain = _subject_plain(
+            match,
+            summary,
+            next_air,
+            staff=staff,
+            watch_links=links if conf.show_watch_text else (),
         )
         return Reply(
-            text=_subject_plain(match, summary, deps.matcher.next_air_label(match)),
+            text=plain,
             card=make_card(
                 html,
-                plain=_subject_plain(match, summary, deps.matcher.next_air_label(match)),
+                plain=plain,
                 title=subject.display_name,
                 eyebrow=subject.type_label,
                 subtitle=subject.alt_name,
@@ -180,6 +280,7 @@ class SearchService:
                 theme=theme,
                 width=conf.card_width,
             ),
+            caption=_watch_caption(links) if conf.show_watch_text else "",
         )
 
     async def _summary(self, subject: Subject, umo: str) -> str:
@@ -244,14 +345,27 @@ class SearchService:
         items = sorted(day.items, key=lambda item: (-item.score, -item.doing))
         theme, _ = await style_for(deps, umo)
         limit = 8 if compact else 12
-        covers = (
-            {}
+        extras = (
+            ()
             if compact
-            else await cover_map(deps, ((item.id, item.image) for item in items[:limit]))
+            else await _long_running(deps, weekday=weekday, days=days, limit=LONG_RUN_LIMIT)
         )
+        long_items = [subject for subject, _ in extras]
+        shown = items[:limit] + long_items
+        covers = {} if compact else await cover_map(deps, ((item.id, item.image) for item in shown))
+        times = await _air_times(deps, shown)
+        times.update({subject.id: label for subject, label in extras})
         trimmed = CalendarDay(weekday=day.weekday, label=day.label, items=tuple(items))
-        html = build_today_card(theme, trimmed, width=conf.card_width, limit=limit, covers=covers)
-        plain = _today_plain(trimmed, limit)
+        html = build_today_card(
+            theme,
+            trimmed,
+            width=conf.card_width,
+            limit=limit,
+            covers=covers,
+            times=times,
+            long_running=long_items,
+        )
+        plain = _today_plain(trimmed, limit, extras=extras, times=times)
         return Reply(
             text=plain,
             card=make_card(
@@ -288,10 +402,23 @@ class SearchService:
         ordered = _sort_subjects(picked, conf.push_sort_by, conf.push_sort_order)
         limit = max(1, conf.push_max_items)
         theme, _ = await style_for(deps, umo)
-        covers = await cover_map(deps, ((item.id, item.image) for item in ordered[:limit]))
+        extras = await _long_running(deps, weekday=weekday, days=days, limit=LONG_RUN_LIMIT)
+        long_items = [subject for subject, _ in extras]
+        shown = ordered[:limit] + long_items
+        covers = await cover_map(deps, ((item.id, item.image) for item in shown))
+        times = await _air_times(deps, shown)
+        times.update({subject.id: label for subject, label in extras})
         trimmed = CalendarDay(weekday=day.weekday, label=day.label, items=tuple(ordered))
-        html = build_today_card(theme, trimmed, width=conf.card_width, limit=limit, covers=covers)
-        plain = _today_plain(trimmed, limit)
+        html = build_today_card(
+            theme,
+            trimmed,
+            width=conf.card_width,
+            limit=limit,
+            covers=covers,
+            times=times,
+            long_running=long_items,
+        )
+        plain = _today_plain(trimmed, limit, extras=extras, times=times)
         return Reply(
             text=plain,
             card=make_card(
@@ -475,7 +602,24 @@ def _search_plain(keyword: str, subjects: Sequence[Subject]) -> str:
     return "\n".join(lines)
 
 
-def _subject_plain(match: MatchResult, summary: str, next_air: str) -> str:
+def _watch_caption(links: Sequence[tuple[str, str]]) -> str:
+    """卡片下面那段可点的在线观看链接。
+
+    卡片是图片，图里的链接点不动 —— 这也是上游插件被吐槽最多的一点。
+    所以图之外再补一段纯文本，用户可以直接点。默认开启，嫌刷屏可以关。
+    """
+    rows = [f"{name} {url}" for name, url in list(links)[:5] if name and url]
+    return "▶ 在线观看\n" + "\n".join(rows) if rows else ""
+
+
+def _subject_plain(
+    match: MatchResult,
+    summary: str,
+    next_air: str,
+    *,
+    staff: Sequence[tuple[str, str]] = (),
+    watch_links: Sequence[tuple[str, str]] = (),
+) -> str:
     subject = match.subject
     if subject is None:
         return match.title or "没有可用信息"
@@ -492,6 +636,17 @@ def _subject_plain(match: MatchResult, summary: str, next_air: str) -> str:
     lines.append(" · ".join(meta))
     if next_air:
         lines.append(f"下一集：{next_air}")
+    season = match.season
+    crew = [
+        (label, value)
+        for label, value in (
+            ("导演", season.staff_of("导演", "監督", "监督") if season else ""),
+            ("动画制作", season.studio if season else ""),
+        )
+        if value
+    ] or list(staff)[:2]
+    if crew:
+        lines.append(" · ".join(f"{label} {value}" for label, value in crew))
     if subject.tags:
         lines.append("标签：" + " ".join(subject.tags[:6]))
     if summary:
@@ -499,6 +654,9 @@ def _subject_plain(match: MatchResult, summary: str, next_air: str) -> str:
         lines.append(clip(flatten(summary), 220))
     if subject.url:
         lines.append(subject.url)
+    caption = _watch_caption(watch_links)
+    if caption:
+        lines.extend(("", caption))
     return "\n".join(lines)
 
 
@@ -511,14 +669,36 @@ def _calendar_plain(days: Sequence[CalendarDay]) -> str:
     return "\n".join(lines)
 
 
-def _today_plain(day: CalendarDay, limit: int) -> str:
+def _today_plain(
+    day: CalendarDay,
+    limit: int,
+    *,
+    extras: Sequence[tuple[Subject, str]] = (),
+    times: Mapping[int, str] | None = None,
+) -> str:
+    """纯文本兜底。渲染失败时用户看到的就是这段，所以卡片有什么它就得有什么。"""
+
+    clock = times or {}
     lines = [f"{day.label}放送（共 {len(day.items)} 部）："]
     for item in day.items[:limit]:
-        score = f" {item.score:g}分" if item.score else ""
-        lines.append(f"· {item.display_name}{score}")
+        lines.append("· " + _today_line(item, clock.get(item.id, "")))
     if len(day.items) > limit:
         lines.append(f"…还有 {len(day.items) - limit} 部")
+    if extras:
+        lines.append("")
+        lines.append("长期连载（年番 / 半年番）：")
+        for subject, label in extras:
+            lines.append("· " + _today_line(subject, label))
     return "\n".join(lines)
+
+
+def _today_line(item: Subject, air_time: str) -> str:
+    bits = [item.display_name]
+    if air_time:
+        bits.append(air_time)
+    if item.score:
+        bits.append(f"{item.score:g}分")
+    return " · ".join(bits)
 
 
 def _season_plain(code: str, entries: Sequence) -> str:

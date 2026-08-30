@@ -26,7 +26,13 @@ from typing import Any
 import httpx
 
 from .activity import ActivityLog
-from .constants import BROWSER_USER_AGENT, COVER_MAX_BYTES, DEFAULT_USER_AGENT
+from .constants import (
+    BROWSER_USER_AGENT,
+    COVER_BGM_SIZE,
+    COVER_MAX_BYTES,
+    DEFAULT_USER_AGENT,
+)
+from .images import bgm_cover_size, shrink
 
 RETRY_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524})
 # 「资源不存在」而不是「站点故障」：bangumi-data 的未来月份文件（下个季度还没发布）、
@@ -456,33 +462,48 @@ class HttpClient:
         location = response.headers.get("location", "")
         return location or str(response.url) or url
 
-    async def data_uri(self, url: str, *, ttl: float = 86400.0) -> str:
-        """下载图片并转成 base64 data URI；失败时返回空串，调用方自行降级。"""
+    async def data_uri(self, url: str, *, ttl: float = 86400.0, max_edge: int = 0) -> str:
+        """下载图片并转成 base64 data URI；失败时返回空串，调用方自行降级。
+
+        「max_edge」 大于 0 时会先把图缩到长边不超过它再编码。卡片渲染是把图片
+        内联进 HTML 的，一张 1 MB 的封面 base64 之后接近 1.4 MB，十二张就能把
+        远端 t2i / html_render 服务撑爆，所以默认调用方都应该给一个尺寸上限。
+        """
 
         if not url or url.startswith("data:"):
             return url
-        key = self._cache_key("cover", url, None)
+        target = bgm_cover_size(url, COVER_BGM_SIZE) if max_edge else url
+        # 缓存键带上尺寸，避免瓦片用的小图和详情卡用的大图互相覆盖
+        key = self._cache_key("cover", target, {"edge": max_edge})
         cached = self.cache.get(key)
         if cached is not None:
             return cached
         try:
-            payload = await self.fetch_bytes(url, retries=1)
+            payload = await self.fetch_bytes(target, retries=1)
         except Exception:  # noqa: BLE001 - 封面抓不到就记一条空缓存，别每次都重试
             self.cache.set(key, "", 600.0)
             return ""
-        mime = _guess_mime(url, payload)
+        mime = _guess_mime(target, payload)
+        if max_edge:
+            payload, shrunk_mime = await asyncio.to_thread(shrink, payload, max_edge=max_edge)
+            mime = shrunk_mime or mime
         encoded = f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
         self.cache.set(key, encoded, ttl)
         return encoded
 
-    async def data_uris(self, urls: list[str]) -> dict[str, str]:
-        """批量转封面，全部并发但受同一个 Semaphore 约束。"""
+    async def data_uris(self, urls: list[str], *, max_edge: int = 0) -> dict[str, str]:
+        """批量转封面，全部并发但受同一个 Semaphore 约束。
+
+        返回的字典以**原始 URL**为键（不是改写后的地址），这样调用方可以直接
+        用自己手上的链接去取；抓失败的键直接缺席。
+        """
 
         unique = [url for url in dict.fromkeys(urls) if url]
         if not unique:
             return {}
         results = await asyncio.gather(
-            *(self.data_uri(url) for url in unique), return_exceptions=True
+            *(self.data_uri(url, max_edge=max_edge) for url in unique),
+            return_exceptions=True,
         )
         return {
             url: value

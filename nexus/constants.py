@@ -141,3 +141,12 @@ MAX_ACTIVITY_ENTRIES = 240
 MIN_RSS_INTERVAL_MINUTES = 5
 COVER_CACHE_DAYS = 30
 COVER_MAX_BYTES = 4 * 1024 * 1024
+
+# 卡片里的封面一律先瘦身再内联：bgm 图床的 「l」 档单张近 1 MB，
+# 十二张 base64 之后 HTML 会涨到十几 MB，远端渲染服务直接吃不下。
+# 「c」 档（common）分辨率对 96px 的瓦片来说仍然过剩，够用且省一个数量级。
+COVER_BGM_SIZE = "c"
+#: 瓦片封面的长边上限（px）。卡片按 1.5 倍缩放渲染，所以留到 2 倍显示尺寸。
+COVER_THUMB_EDGE = 320
+#: 详情卡主视觉的封面要大一些，单独一档。
+COVER_HERO_EDGE = 640

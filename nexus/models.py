@@ -229,6 +229,28 @@ class FeedItem:
     published_ts: float = 0.0
 
 
+@dataclass(frozen=True)
+class MikanGroup:
+    """Mikan 番组页上的一个字幕组 / 搬运组。
+
+    「samples」 是这个组最近几条发布的标题原文，「tags」 是从标题里嗅出来的
+    语言 / 画质 / 片源标记。两者都只用于让用户在选源时看清「这个组给的是
+    简体还是繁体、1080p 还是 720p、Baha 还是 ABEMA」，不参与去重。
+    """
+
+    id: int
+    name: str
+    updated: str = ""
+    samples: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+
+    @property
+    def label(self) -> str:
+        """列表里那一行的短描述：组名 + 语言画质标记。"""
+
+        return f"{self.name}（{' / '.join(self.tags)}）" if self.tags else self.name
+
+
 @dataclass
 class Subscription:
     """一条 RSS 订阅。同一会话内 `name` 唯一。"""
@@ -302,6 +324,8 @@ class MatchResult:
     season: SeasonEntry | None = None
     age: AgeItem | None = None
     moegirl: MoegirlHit | None = None
+    #: Mikan 的番组 ID。有它才能列字幕组、拼单组 RSS；bangumi-data 没登记时为空。
+    mikan_id: str = ""
     mikan_rss: str = ""
     confidence: float = 0.0
     notes: tuple[str, ...] = ()

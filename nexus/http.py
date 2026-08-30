@@ -20,8 +20,10 @@ import base64
 import hashlib
 import random
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -31,6 +33,7 @@ from .constants import (
     COVER_BGM_SIZE,
     COVER_MAX_BYTES,
     DEFAULT_USER_AGENT,
+    TLS_RELAXED_HOSTS,
 )
 from .images import bgm_cover_size, shrink
 
@@ -104,6 +107,28 @@ def is_ssl_error(error: BaseException) -> bool:
     """
     text = f"{type(error).__name__} {error}".lower()
     return any(marker in text for marker in SSL_MARKERS)
+
+
+def host_of(url: str) -> str:
+    """取 URL 的主机名（小写、去端口）。解析失败返回空串。"""
+
+    try:
+        return (urlsplit(str(url or "")).hostname or "").lower()
+    except ValueError:  # pragma: no cover - 畸形 URL
+        return ""
+
+
+def tls_relaxed(url: str, hosts: Sequence[str] = TLS_RELAXED_HOSTS) -> bool:
+    """这个 URL 的主机是否在 TLS 宽松名单里（精确匹配或其子域）。
+
+    用后缀匹配而不是 「in」：只写 「yuc.wiki」 就要覆盖 「www.yuc.wiki」，
+    但 「evilyuc.wiki」 必须排除在外，所以子域判定要带上那个点。
+    """
+
+    host = host_of(url)
+    if not host:
+        return False
+    return any(host == entry or host.endswith(f".{entry}") for entry in hosts if entry)
 
 
 def browser_headers(referer: str = "") -> dict[str, str]:
@@ -330,10 +355,14 @@ class HttpClient:
         """
         attempts = (self.max_retries if retries is None else max(0, retries)) + 1
         last_error: Exception | None = None
-        for attempt in range(1, attempts + 1):
+        # 可能在循环中途因命中 TLS 宽松名单而翻成 True，所以不能直接用参数
+        use_insecure = insecure
+        attempt = 0
+        while attempt < attempts:
+            attempt += 1
             try:
                 async with self._semaphore:
-                    client = await self.client(insecure=insecure)
+                    client = await self.client(insecure=use_insecure)
                     self.requests += 1
                     response = await client.request(
                         method.upper(),
@@ -359,6 +388,13 @@ class HttpClient:
             except (httpx.TimeoutException, httpx.TransportError) as error:
                 last_error = error
                 if is_ssl_error(error):
+                    if not use_insecure and tls_relaxed(url):
+                        # 名单内站点（如 長門番堂）证书链长期不全，降级重试一次，
+                        # 额外给一次配额，不占用原本的重试次数
+                        self._log("http", f"{url} 证书链异常，按宽松名单降级重试", "warn")
+                        use_insecure = True
+                        attempts += 1
+                        continue
                     # 证书问题重试同样没用，但要单独归类好让上层给出准确提示
                     self.failures += 1
                     self._log("http", f"{url} 证书校验失败：{error}", "warn")

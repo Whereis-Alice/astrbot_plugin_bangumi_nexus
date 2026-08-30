@@ -1,6 +1,6 @@
 """数据源集合：一次构造，处处注入。
 
-服务层只需要拿到一个 「SourceHub」，就能访问全部八个数据源，而不必各自 new 一遍、
+服务层只需要拿到一个 「SourceHub」，就能访问全部九个数据源，而不必各自 new 一遍、
 各自持有 HTTP 客户端。配置变更时由 「reconfigure」 统一刷新。
 
 Copyright (C) 2026 Whereis-Alice and AstrBot Plugin Authors.
@@ -17,6 +17,7 @@ from .age import AgeSource
 from .anime1 import Anime1Source
 from .bangumi import BangumiSource
 from .bangumi_data import BangumiDataSource
+from .mikan import MikanSource
 from .moegirl import MoegirlSource
 from .rss import RssSource
 from .yuc import YucSource
@@ -33,6 +34,7 @@ class SourceHub:
     yuc: YucSource
     age: AgeSource
     moegirl: MoegirlSource
+    mikan: MikanSource
     rss: RssSource
 
     @classmethod
@@ -45,6 +47,7 @@ class SourceHub:
             yuc=YucSource(http),
             age=AgeSource(http),
             moegirl=MoegirlSource(http),
+            mikan=MikanSource(http),
             rss=RssSource(http),
         )
 

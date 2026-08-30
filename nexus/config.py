@@ -179,6 +179,8 @@ class NexusConfig:
     rss_interval_minutes: int = 15
     rss_max_items_per_poll: int = 5
     rss_first_poll_silent: bool = True
+    #: 只给番名订阅时，先列出 Mikan 上的字幕组让用户回序号，而不是直接收下全部发布。
+    rss_pick_source: bool = True
     rss_history_days: int = 14
     rsshub_base: str = "https://rsshub.app"
     mikan_base: str = "https://mikanani.me"
@@ -276,6 +278,7 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
         ),
         rss_max_items_per_poll=_as_int(_get(raw, "rss_max_items_per_poll", 5), 5, low=1, high=30),
         rss_first_poll_silent=_as_bool(_get(raw, "rss_first_poll_silent", True), True),
+        rss_pick_source=_as_bool(_get(raw, "rss_pick_source", True), True),
         rss_history_days=_as_int(_get(raw, "rss_history_days", 14), 14, low=1, high=180),
         rsshub_base=_as_str(_get(raw, "rsshub_base", ""), "https://rsshub.app").rstrip("/"),
         mikan_base=_as_str(_get(raw, "mikan_base", ""), "https://mikanani.me").rstrip("/"),

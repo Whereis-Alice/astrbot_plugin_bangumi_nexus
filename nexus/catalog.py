@@ -199,8 +199,8 @@ SUBSCRIBE = Category(
     commands=(
         Command(
             "sub",
-            "sub <名称> <RSS地址|mikan:关键词|rsshub:路径|dmhy:关键词>",
-            "在当前会话订阅一个源；支持 mikan: / rsshub: / dmhy: 简写。",
+            "sub <名称> [RSS地址|mikan:番剧ID|rsshub:路径|dmhy:关键词]",
+            "订阅一个源。只写番名会先列出 Mikan 上的字幕组，回复序号即订阅一个组。",
             origin="astrbot_plugin_rsshub",
         ),
         Command("unsub", "unsub <名称>", "退订一个源。", origin="astrbot_plugin_rsshub"),
@@ -210,6 +210,12 @@ SUBSCRIBE = Category(
             "当前会话的订阅清单卡。",
             aliases=("订阅列表",),
             origin="astrbot_plugin_rsshub",
+        ),
+        Command(
+            "sub_exclude",
+            "sub_exclude [list|add <词>|del <词>|clear|preset|apply]",
+            "全局排除项：命中的发布直接丢掉。新订阅自动套用，apply 可刷到已有订阅。",
+            aliases=("排除词",),
         ),
         Command(
             "sub_test",

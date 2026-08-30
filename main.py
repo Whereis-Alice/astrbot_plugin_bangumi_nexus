@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import inspect
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -28,6 +28,7 @@ import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools
+from astrbot.core.message.message_event_result import MessageChain
 
 from .nexus import catalog
 from .nexus.activity import ActivityLog
@@ -61,6 +62,7 @@ from .nexus.services.diagnostics import DiagnosticsService
 from .nexus.services.gacha import GachaService
 from .nexus.services.matcher import Matcher
 from .nexus.services.notifier import Notifier
+from .nexus.services.picker import PICK_NOTE
 from .nexus.services.scheduler import Scheduler
 from .nexus.services.search import SearchService
 from .nexus.services.subscriptions import RAW_NOTE, SubscriptionService
@@ -467,22 +469,24 @@ class BangumiNexusPlugin(Star):
             return None
         return self._image_component(result) if result else None
 
-    async def _emit(
+    async def _compose(
         self,
-        event: AstrMessageEvent,
         reply: Reply,
         *,
         conf: NexusConfig,
         extra: str = "",
-    ) -> Any:
-        """把服务层的 「Reply」 翻译成一条消息。
+    ) -> list[Any]:
+        """把服务层的 「Reply」 翻译成一串消息组件。
 
         优先级：卡片图 → 卡片纯文本 → 回复纯文本；带 「RAW_NOTE」 的回复
         （比如 「/sub_export」 的 JSON）必须保持可复制，不转图。
+
+        为什么要单独拆出组件列表：选源列表这类一次性消息选完要撤回，
+        而 「event.chain_result」 交给框架发送后拿不到消息 id，只能自己发。
         """
 
         if reply.empty:
-            return None
+            return []
         tail = self._clean(extra)
         text = reply.text
 
@@ -494,17 +498,80 @@ class BangumiNexusPlugin(Star):
                 chain: list[Any] = [self._image_component(card.image_path or card.image_url)]
                 if tail:
                     chain.append(Comp.Plain("\n" + tail))
-                return event.chain_result(chain)
+                return chain
             text = card.text or reply.text
 
         body = "\n\n".join(part for part in (str(text or "").strip(), tail) if part)
         if not body:
-            return None
+            return []
         if RAW_NOTE not in reply.notes and conf.long_reply_as_card and is_long_reply(body):
             image = await self._text_image(body)
             if image is not None:
-                return event.chain_result([image])
-        return event.plain_result(body)
+                return [image]
+        return [Comp.Plain(body)]
+
+    async def _emit(
+        self,
+        event: AstrMessageEvent,
+        reply: Reply,
+        *,
+        conf: NexusConfig,
+        extra: str = "",
+    ) -> Any:
+        """常规回复：交给框架发送，不关心消息 id。"""
+
+        components = await self._compose(reply, conf=conf, extra=extra)
+        return event.chain_result(components) if components else None
+
+    async def _send_capture(self, event: AstrMessageEvent, components: list[Any]) -> str:
+        """自己把消息发出去，并尽量把消息 id 带回来。
+
+        「event.send」 与 「event.chain_result」 都不返回消息 id，所以这里绕到
+        aiocqhttp 的原生接口。任何一步不成（换了平台、接口报错、协议端不返回 id）
+        都退回普通发送并返回空串 —— 代价只是「选源列表留在聊天记录里」。
+        """
+
+        chain = MessageChain(chain=list(components))
+        bot = getattr(event, "bot", None)
+        parse = getattr(event, "_parse_onebot_json", None)
+        if bot is None or parse is None:
+            await event.send(chain)
+            return ""
+        try:
+            payload = await parse(chain)
+            group_id = str(event.get_group_id() or "")
+            if group_id.isdigit():
+                result = await bot.send_group_msg(group_id=int(group_id), message=payload)
+            else:
+                sender = str(event.get_sender_id() or "")
+                if not sender.isdigit():
+                    raise ValueError("拿不到数字会话 id")
+                result = await bot.send_private_msg(user_id=int(sender), message=payload)
+        except Exception:  # noqa: BLE001 - 拿不到 id 只影响事后撤回，正常发送兜底
+            logger.debug("%s 原生发送失败，退回普通发送", LOG_PREFIX, exc_info=True)
+            await event.send(chain)
+            return ""
+        message_id = result.get("message_id") if isinstance(result, Mapping) else None
+        return str(message_id) if message_id else ""
+
+    async def _recall(self, event: AstrMessageEvent, message_ids: Sequence[str]) -> int:
+        """撤回一批消息，返回成功条数。失败只写调试日志。"""
+
+        bot = getattr(event, "bot", None)
+        if bot is None:
+            return 0
+        done = 0
+        for raw in message_ids:
+            token = str(raw or "").strip()
+            if not token.lstrip("-").isdigit():
+                continue
+            try:
+                await bot.call_action("delete_msg", message_id=int(token))
+            except Exception:  # noqa: BLE001 - 撤回失败只是多留一条历史，不该影响主流程
+                logger.debug("%s 撤回消息失败 id=%s", LOG_PREFIX, token, exc_info=True)
+            else:
+                done += 1
+        return done
 
     async def _run(
         self,
@@ -857,15 +924,8 @@ class BangumiNexusPlugin(Star):
             reply, match = await self._watchlist.add(umo, query)
             if match is None:
                 return reply, ""
-            suggestions = self._subs.suggest(match)
-            if not suggestions:
-                return reply, ""
-            prefix = self._command_prefix()
-            lines = ["想第一时间知道更新？挑一条订阅："]
-            lines.extend(
-                f"· {label}：{prefix}sub {match.title} {url}" for label, url in suggestions
-            )
-            return reply, "\n".join(lines)
+            # 顺手开一个「回序号订阅」的会话，提示文本跟在追番卡后面一起发
+            return reply, await self._subs.offer_from_match(umo, match)
 
         async for item in self._serve(event, "追番", call, busy=BUSY_SEARCH):
             yield item
@@ -927,17 +987,59 @@ class BangumiNexusPlugin(Star):
 
     @filter.command("sub", priority=10)
     async def cmd_sub_add(self, event: AstrMessageEvent):
-        """订阅一个更新源；只给番名时会自动去找 Mikan 的 RSS。"""
+        """订阅一个更新源；只给番名时会先列出字幕组让你回序号。"""
 
         args = self._args(event)
         if not args:
             yield event.plain_result(self._usage("sub"))
             event.stop_event()
             return
-        async for item in self._serve(
-            event, "sub", lambda umo, conf: self._subs.add(umo, args), busy=BUSY_SEARCH
-        ):
+        umo = event.unified_msg_origin
+
+        async def worker() -> Any:
+            conf = await self._session_config(umo)
+            reply = await self._subs.add(umo, args)
+            if PICK_NOTE not in reply.notes:
+                return await self._emit(event, reply, conf=conf)
+            # 选源列表要能事后撤回，所以自己发、自己记消息 id
+            components = await self._compose(reply, conf=conf)
+            if not components:
+                return None
+            message_id = await self._send_capture(event, components)
+            if message_id:
+                self._deps.picker.note_message(umo, message_id)
+            return None
+
+        async for item in self._run(event, worker, action="sub", busy=BUSY_SEARCH):
             yield item
+
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=1)
+    async def on_pick_answer(self, event: AstrMessageEvent):
+        """接住选源列表后面那个纯数字回复。
+
+        判定条件收得很紧：当前会话确实有待选列表，且整条消息就是一个范围内的序号。
+        不满足就直接放行 —— 否则这个 「ALL」 钩子会吞掉群里所有聊天，
+        这是同类插件最常见的翻车方式。
+        """
+
+        umo = event.unified_msg_origin
+        hit = self._deps.picker.resolve(umo, event.message_str or "")
+        if hit is None:
+            return
+        session, option = hit
+        try:
+            conf = await self._session_config(umo)
+            reply = await self._subs.choose(umo, option.index)
+            await self._recall(event, session.message_ids)
+            result = await self._emit(event, reply, conf=conf)
+        except Exception:  # noqa: BLE001 - 选源兜底，异常不能让消息处理链崩掉
+            logger.exception("%s 选源落库失败", LOG_PREFIX)
+            self._activity.error("sub", "选源落库失败，详见日志")
+            yield event.plain_result("⚠️ 这个源没订上，稍后再试")
+        else:
+            if result is not None:
+                yield result
+        event.stop_event()
 
     @filter.command("unsub", priority=10)
     async def cmd_sub_remove(self, event: AstrMessageEvent):
@@ -959,6 +1061,16 @@ class BangumiNexusPlugin(Star):
 
         async for item in self._serve(
             event, "sub_list", lambda umo, conf: self._subs.listing(umo), busy=BUSY_RENDER
+        ):
+            yield item
+
+    @filter.command("sub_exclude", alias={"排除词"}, priority=10)
+    async def cmd_sub_exclude(self, event: AstrMessageEvent):
+        """管理全局排除项：命中的发布直接丢掉。"""
+
+        args = self._args(event)
+        async for item in self._serve(
+            event, "sub_exclude", lambda umo, conf: self._subs.excludes(umo, args)
         ):
             yield item
 

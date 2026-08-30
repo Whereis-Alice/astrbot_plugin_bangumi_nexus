@@ -202,6 +202,12 @@
     "hint": "强烈建议开启：否则刚订阅就会把整个 RSS 历史全推一遍。",
     "default": true
   },
+  "rss_pick_source": {
+    "description": "只给番名时先让用户挑字幕组",
+    "type": "bool",
+    "hint": "开启后 /sub 只写番名会先列出 Mikan 上的字幕组，回复序号才真正订阅；关闭则沿用「关键词搜索源」，会收下所有组的发布。",
+    "default": true
+  },
   "rss_history_days": {
     "description": "推送去重记录保留天数",
     "type": "int",

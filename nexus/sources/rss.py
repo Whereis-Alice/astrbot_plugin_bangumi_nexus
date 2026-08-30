@@ -210,6 +210,16 @@ def mikan_bangumi_feed(base: str, mikan_id: str | int) -> str:
     return f"{base.rstrip('/')}/RSS/Bangumi?bangumiId={mikan_id}"
 
 
+def mikan_group_feed(base: str, mikan_id: str | int, subgroup_id: str | int) -> str:
+    """Mikan 单番 + 单字幕组 RSS。
+
+    这是订阅番剧的正确姿势：只订一个组，一集只推一条。
+    「subgroupid」 留空时 Mikan 会退回整番源，所以调用方必须先确认拿到了组 id。
+    """
+
+    return f"{base.rstrip('/')}/RSS/Bangumi?bangumiId={mikan_id}&subgroupid={subgroup_id}"
+
+
 def mikan_search_feed(base: str, keyword: str) -> str:
     return f"{base.rstrip('/')}/RSS/Search?searchstr={quote(keyword, safe='')}"
 

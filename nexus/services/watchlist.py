@@ -12,9 +12,9 @@ from collections.abc import Sequence
 
 from ..constants import MAX_WATCHLIST_PER_SESSION, WATCH_STATUS_CN
 from ..models import MatchResult, Subject, WatchItem
-from ..render import build_watchlist_card
+from ..render import build_notice_card, build_watchlist_card
 from ..titles import similarity
-from .base import Deps, Reply, cover_map, make_card, numeric, style_for
+from .base import Deps, Reply, cover_map, cover_uri, make_card, numeric, style_for
 from .search import SearchService
 
 STATUS_WATCHING = "watching"
@@ -78,16 +78,71 @@ class WatchlistService:
             cover=subject.image,
             weekday=subject.air_weekday,
         )
-        await deps.store.upsert_watch(item)
+        stored = await deps.store.upsert_watch(item)
         deps.activity.info("watchlist", f"{umo} 追番 {item.title}")
+        return await self._added_card(umo, stored, subject, match), match
 
-        lines = [f"已加入追番表：{item.title}"]
+    async def _added_card(
+        self, umo: str, item: WatchItem, subject: Subject, match: MatchResult
+    ) -> Reply:
+        """「已加入追番表」结果卡。
+
+        上游这一步只回一行纯文本，字数一超阈值就被 t2i 转成一张灰底文字图 ——
+        既不好看，也看不出加进来的到底是哪部番。所以这里走正经通知卡：
+        带封面、带放送与集数，用户一眼能确认「加对了没」。
+        """
+        deps = self._deps
+        conf = deps.conf
+        theme, _ = await style_for(deps, umo)
         next_air = deps.matcher.next_air_label(match)
+
+        chips = [
+            chip
+            for chip in (
+                f"评分 {subject.score_label}" if subject.score else "",
+                subject.weekday_label,
+                f"全 {item.total} 话" if item.total else "",
+                subject.type_label,
+            )
+            if chip
+        ]
+        lines = [f"名称：{item.title}"]
+        if subject.alt_name:
+            lines.append(f"原名：{subject.alt_name}")
         if next_air:
             lines.append(f"下一集：{next_air}")
+        elif subject.air_date:
+            lines.append(f"开播：{subject.air_date}")
         if item.total:
-            lines.append(f"全 {item.total} 话，用 /看到 {item.title} +1 记进度。")
-        return Reply.plain("\n".join(lines)), match
+            lines.append(f"进度：0 / {item.total}")
+        lines.append("记进度：/看到 " + item.title + " +1")
+        lines.append("不想追了：/弃坑 " + item.title)
+
+        html = build_notice_card(
+            theme,
+            eyebrow="WATCHLIST",
+            title="已加入追番表",
+            subtitle=item.title,
+            lines=lines,
+            chips=chips,
+            cover=await cover_uri(deps, item.cover),
+            width=conf.card_width,
+            stamp="WATCH",
+        )
+        plain = "\n".join([f"已加入追番表：{item.title}", *lines[1:]])
+        return Reply(
+            text=plain,
+            card=make_card(
+                html,
+                plain=plain,
+                title="已加入追番表",
+                eyebrow="WATCHLIST",
+                subtitle=item.title,
+                chips=chips,
+                theme=theme,
+                width=conf.card_width,
+            ),
+        )
 
     async def drop(self, umo: str, query: str) -> Reply:
         """标记弃坑。记录保留，方便以后 「/追番」 复活。"""

@@ -35,6 +35,7 @@ from ..catalog import alias_count, category_count, command_count
 from ..catalog import payload as catalog_payload
 from ..config import GACHA_SOURCES, RENDERERS, SORT_KEYS, NexusConfig
 from ..constants import (
+    EXCLUDE_PRESETS,
     MAX_SUBSCRIPTIONS_PER_SESSION,
     MAX_WATCHLIST_PER_SESSION,
     PAGE_NAME,
@@ -59,12 +60,16 @@ from ..render import (
 )
 from ..services.base import (
     PREF_DAILY,
+    PREF_EXCLUDES,
     PREF_RENDERER,
     PREF_TARGET,
     PREF_TEMPLATE,
     PREF_THEME,
     Deps,
+    excludes_for,
+    expand_excludes,
     make_card,
+    set_excludes,
 )
 from ..services.diagnostics import DiagnosticsService
 from ..services.gacha import GachaService
@@ -96,7 +101,7 @@ LOG_LIMIT = 200
 # 预览卡片支持的示例种类。
 PREVIEW_KINDS = ("help", "search", "watchlist", "notice")
 
-PREF_KEYS = (PREF_THEME, PREF_RENDERER, PREF_TEMPLATE, PREF_DAILY, PREF_TARGET)
+PREF_KEYS = (PREF_THEME, PREF_RENDERER, PREF_TEMPLATE, PREF_DAILY, PREF_TARGET, PREF_EXCLUDES)
 
 WATCH_STATUSES = (STATUS_WATCHING, STATUS_PLANNED, STATUS_FINISHED, STATUS_DROPPED)
 
@@ -605,6 +610,73 @@ class NexusService:
 
         self._deps.activity.info("webui", "订阅操作 " + op + " → " + (umo or "全局"))
         return {"ok": True, "op": op, "message": reply.text}
+
+    async def sub_sources(self, name: str) -> dict[str, Any]:
+        """列出一部番在 Mikan 上的字幕组，供面板上「选源」用。
+
+        为什么面板也要有这一步：只按番名订阅拿到的是 Mikan 的关键词搜索源，
+        一集番会被七八个字幕组各推一遍。跟聊天侧走同一个 「pick_options」，
+        两处看到的候选完全一致。
+        """
+        name = str(name or "").strip()
+        if not name:
+            raise NexusWebError("请先填写番剧名称")
+        options = await self._wiring.subs.pick_options(name)
+        return {
+            "name": name,
+            "total": len(options),
+            "items": [
+                {
+                    "index": option.index,
+                    "label": option.label,
+                    "detail": option.detail,
+                    "tags": list(option.tags),
+                    "group_id": option.group_id,
+                    "url": option.url,
+                }
+                for option in options
+            ],
+        }
+
+    async def excludes(self, umo: str = "") -> dict[str, Any]:
+        """全局排除项：可勾的预设清单 + 当前会话已勾的 + 展开后的实际过滤词。"""
+
+        chosen = await excludes_for(self._deps, umo) if umo else ()
+        return {
+            "umo": umo,
+            "presets": [{"name": name, "words": list(words)} for name, words in EXCLUDE_PRESETS],
+            "chosen": list(chosen),
+            "expanded": list(expand_excludes(chosen)),
+        }
+
+    async def save_excludes(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """保存勾选，可选地立刻回写到该会话已有的订阅上。
+
+        「apply」 默认关：改了全局清单不代表用户想动已经订好的老订阅，
+        那属于批量覆盖，必须是明确的一次点击。
+        """
+        umo = str(payload.get("umo") or "").strip()
+        if not umo:
+            raise NexusWebError("请先选择一个会话")
+        raw = payload.get("values")
+        if not isinstance(raw, Sequence) or isinstance(raw, str | bytes):
+            raise NexusWebError("排除项要给一个数组")
+        chosen = await set_excludes(self._deps, umo, [str(item) for item in raw])
+        expanded = expand_excludes(chosen)
+        applied = 0
+        if bool(payload.get("apply")):
+            applied = await self._deps.store.apply_excludes(umo, expanded)
+        self._deps.activity.info(
+            "webui",
+            f"排除项更新（{len(chosen)} 项）→ {umo}" + (f"，回写 {applied} 条" if applied else ""),
+        )
+        return {
+            "ok": True,
+            "umo": umo,
+            "chosen": list(chosen),
+            "expanded": list(expanded),
+            "applied": applied,
+        }
 
     # -- 会话 -------------------------------------------------------------
     async def sessions(self) -> dict[str, Any]:
@@ -1220,6 +1292,9 @@ class NexusWebApi:
             (prefix + "/watchlist/add", self.post_watch_add, ["POST"], label + "添加追番"),
             (prefix + "/subs", self.get_subs, ["GET"], label + "订阅列表"),
             (prefix + "/subs", self.post_subs, ["POST"], label + "订阅操作"),
+            (prefix + "/subs/sources", self.get_sub_sources, ["GET"], label + "列出可选字幕组"),
+            (prefix + "/excludes", self.get_excludes, ["GET"], label + "读取全局排除项"),
+            (prefix + "/excludes", self.post_excludes, ["POST"], label + "保存全局排除项"),
             (prefix + "/sessions", self.get_sessions, ["GET"], label + "已知会话"),
             (prefix + "/targets", self.get_targets, ["GET"], label + "播报目标"),
             (prefix + "/targets", self.post_targets, ["POST"], label + "保存播报目标"),
@@ -1352,6 +1427,24 @@ class NexusWebApi:
     async def post_subs(self) -> Any:
         async def run() -> Any:
             return _json(await self._service.sub_action(await _json_body()))
+
+        return await self._guard(run)
+
+    async def get_sub_sources(self) -> Any:
+        async def run() -> Any:
+            return _json(await self._service.sub_sources(str(_query("name", "") or "")))
+
+        return await self._guard(run)
+
+    async def get_excludes(self) -> Any:
+        async def run() -> Any:
+            return _json(await self._service.excludes(str(_query("umo", "") or "")))
+
+        return await self._guard(run)
+
+    async def post_excludes(self) -> Any:
+        async def run() -> Any:
+            return _json(await self._service.save_excludes(await _json_body()))
 
         return await self._guard(run)
 

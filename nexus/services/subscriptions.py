@@ -18,15 +18,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..config import RENDERERS
-from ..constants import MAX_SUBSCRIPTIONS_PER_SESSION
-from ..models import MatchResult, Notification, Subscription
-from ..render import build_feed_card, build_notice_card, theme_keys
-from ..sources.rss import dmhy_feed, normalize_feed_url, rsshub_feed
+from ..constants import (
+    EXCLUDE_PRESETS,
+    MAX_SUBSCRIPTIONS_PER_SESSION,
+    PICK_MAX_OPTIONS,
+    PICK_SESSION_SECONDS,
+)
+from ..models import MatchResult, MikanGroup, Notification, Subscription
+from ..render import build_feed_card, build_notice_card, build_picker_card, theme_keys
+from ..sources.rss import dmhy_feed, mikan_group_feed, normalize_feed_url, rsshub_feed
 from .base import (
     PREF_DAILY,
     PREF_RENDERER,
@@ -35,10 +41,14 @@ from .base import (
     Deps,
     Reply,
     cover_uri,
+    excludes_for,
+    expand_excludes,
     make_card,
     parse_switch,
+    set_excludes,
     style_for,
 )
+from .picker import PICK_NOTE, PickOption
 
 FEED_PREFIXES = ("http://", "https://", "rsshub:", "mikan:", "dmhy:", "/")
 RAW_NOTE = "raw"
@@ -77,38 +87,232 @@ class SubscriptionService:
     # /sub
     # ------------------------------------------------------------------
     async def add(self, umo: str, raw: str) -> Reply:
-        """新增或更新一条订阅。地址留空时自动去找 Mikan 单番源。"""
+        """新增或更新一条订阅。地址留空时先列出 Mikan 上的字幕组让用户挑一个。"""
 
-        deps = self._deps
-        conf = deps.conf
         name, target = split_target(raw)
         if not name:
             return Reply.plain(
-                "用法：/sub <名称> <RSS地址>\n"
+                "用法：/sub <名称> [RSS地址]\n"
                 "地址可以写完整 URL，也可以用简写：mikan:番剧ID、rsshub:路由、dmhy:关键词。\n"
-                "只写名称的话，我会自己去 Mikan 找这部番的源。"
+                "只写名称的话，我会列出这部番在 Mikan 上的字幕组，你回一个序号就行。"
             )
+        if target:
+            return await self._commit(umo, name=name, target=target)
+        return await self._offer(umo, name)
 
-        subject_id = 0
-        cover = ""
-        notes: list[str] = []
-        if not target:
-            match = await deps.matcher.by_title(name)
-            target = match.mikan_rss
-            if not target:
-                return Reply.plain(
-                    f"没能自动找到「{name}」的 RSS 源。"
-                    f"请手动给一个地址，例如：/sub {name} mikan:3141"
-                )
-            if match.subject is not None:
-                subject_id = match.subject.id
-                cover = match.subject.image
-            notes.extend(match.notes)
+    async def _offer(self, umo: str, name: str) -> Reply:
+        """只给了番名时的入口。
 
+        三级降级，从好到坏依次是：
+        1. Mikan 上有多个字幕组 → 列出来等用户回序号（**订一个组**，不刷屏）；
+        2. 只有一个组 → 没什么可选的，直接订这一个组；
+        3. 一个组都没抓到（新番还没人发布 / 页面改版 / 缺 bs4）
+           → 退回关键词搜索源，并在回复里说清代价。
+        """
+        deps = self._deps
+        match = await deps.matcher.by_title(name)
+        notes = list(match.notes)
+        subject_id = match.subject.id if match.subject is not None else 0
+        cover = match.subject.image if match.subject is not None else ""
+        title = match.title if match.subject is not None else name
+
+        mikan_id, groups = "", ()
+        if deps.conf.rss_pick_source:
+            mikan_id, groups = await self._mikan_groups(name, match)
+
+        if len(groups) >= 2:
+            return await self._offer_card(
+                umo,
+                name=name,
+                title=title,
+                mikan_id=mikan_id,
+                groups=groups,
+                subject_id=subject_id,
+                cover=cover,
+            )
+        if len(groups) == 1:
+            only = groups[0]
+            notes.append(f"Mikan 上只有「{only.name}」在发布，已直接用它的单组源")
+            return await self._commit(
+                umo,
+                name=name,
+                target=mikan_group_feed(deps.conf.mikan_base, mikan_id, only.id),
+                subject_id=subject_id,
+                cover=cover,
+                notes=notes,
+            )
+        if not match.mikan_rss:
+            return Reply.plain(
+                f"没能自动找到「{name}」的 RSS 源。请手动给一个地址，例如：/sub {name} mikan:3141"
+            )
+        if deps.conf.rss_pick_source:
+            notes.append("没抓到字幕组列表，先用关键词搜索源顶着（同一集可能来自多个组）")
+        return await self._commit(
+            umo,
+            name=name,
+            target=match.mikan_rss,
+            subject_id=subject_id,
+            cover=cover,
+            notes=notes,
+        )
+
+    async def _mikan_groups(
+        self, name: str, match: MatchResult
+    ) -> tuple[str, tuple[MikanGroup, ...]]:
+        """拿到 Mikan 番组 id 与字幕组列表。
+
+        「bangumi-data」 登记的 「mikan_id」 最可靠，缺了才退回 Mikan 站内搜索 ——
+        搜索按用户原话搜一次，不中再用 Bangumi 的正式标题搜（多为日文原名）。
+        """
+        deps = self._deps
+        mikan_id = match.mikan_id
+        if not mikan_id:
+            for query in dict.fromkeys(part for part in (name, match.title) if part):
+                found = await deps.hub.mikan.search_id(query)
+                if found:
+                    mikan_id = str(found)
+                    break
+        if not mikan_id:
+            return "", ()
+        return mikan_id, await deps.hub.mikan.groups(mikan_id)
+
+    async def _offer_card(
+        self,
+        umo: str,
+        *,
+        name: str,
+        title: str,
+        mikan_id: str,
+        groups: Sequence[MikanGroup],
+        subject_id: int,
+        cover: str,
+    ) -> Reply:
+        """发出选源卡并开一个等待序号的会话。"""
+
+        deps = self._deps
+        conf = deps.conf
+        options = self._build_options(mikan_id, groups)
+        deps.picker.open(
+            umo,
+            kind="sub",
+            name=name,
+            options=options,
+            subject_id=subject_id,
+            cover=cover,
+        )
+        theme, _ = await style_for(deps, umo)
+        chosen = await excludes_for(deps, umo)
+        html = build_picker_card(
+            theme,
+            title=title or name,
+            options=tuple(
+                (str(item.index), item.label, item.detail, " / ".join(item.tags))
+                for item in options
+            ),
+            subtitle=f"共 {len(groups)} 个字幕组在发布这部番",
+            cover=await cover_uri(deps, cover),
+            hint="回复序号即可完成订阅，比如 1。超过 3 分钟不回就作废。",
+            excludes=chosen,
+            width=conf.card_width,
+        )
+        plain = "\n".join(
+            [
+                f"「{title or name}」在 Mikan 上有这些字幕组，回复序号订阅：",
+                *(
+                    f"{item.index}. {item.label}"
+                    + (f"（{' / '.join(item.tags)}）" if item.tags else "")
+                    for item in options
+                ),
+            ]
+        )
+        return Reply(
+            text=plain,
+            card=make_card(
+                html,
+                plain=plain,
+                title=title or name,
+                eyebrow="PICK A SOURCE",
+                theme=theme,
+                width=conf.card_width,
+            ),
+            notes=(PICK_NOTE,),
+        )
+
+    def _build_options(self, mikan_id: str, groups: Sequence[MikanGroup]) -> tuple[PickOption, ...]:
+        """把字幕组列表编号、配好单组 RSS 地址。
+
+        聊天侧的选源卡与 WebUI 的选源面板共用它：两条入口看到的候选必须
+        完全一致，否则「在面板里挑的第 2 个」和「在群里回的 2」会指向不同的组。
+        """
+        base = self._deps.conf.mikan_base
+        return tuple(
+            PickOption(
+                index=index,
+                label=group.name,
+                url=mikan_group_feed(base, mikan_id, group.id),
+                detail=_group_detail(group),
+                group_id=group.id,
+                tags=group.tags,
+            )
+            for index, group in enumerate(groups[:PICK_MAX_OPTIONS], start=1)
+        )
+
+    async def pick_options(self, name: str) -> tuple[PickOption, ...]:
+        """列出一部番可选的单组 RSS 源。WebUI 的「选源」按钮走这里。
+
+        不开选源会话：面板上是点按钮直接订，没有「等一个数字回复」这一步。
+        """
+        name = name.strip()
+        if not name:
+            return ()
+        match = await self._deps.matcher.by_title(name)
+        mikan_id, groups = await self._mikan_groups(name, match)
+        if not mikan_id or not groups:
+            return ()
+        return self._build_options(mikan_id, groups)
+
+    async def choose(self, umo: str, index: int) -> Reply:
+        """用户回了序号：把对应的单组源真正落库。"""
+
+        deps = self._deps
+        session = deps.picker.get(umo)
+        if session is None:
+            return Reply.plain("这次选源已经过期了，重新发一次 /sub 吧。")
+        option = session.option(index)
+        if option is None:
+            return Reply.plain(f"列表里没有第 {index} 项，再看一眼序号。")
+        deps.picker.drop(umo)
+        notes = [f"更新源：{option.label}"]
+        if option.tags:
+            notes.append(f"这个组的发布特征：{' / '.join(option.tags)}")
+        return await self._commit(
+            umo,
+            name=session.name,
+            target=option.url,
+            subject_id=session.subject_id,
+            cover=session.cover,
+            notes=notes,
+        )
+
+    async def _commit(
+        self,
+        umo: str,
+        *,
+        name: str,
+        target: str,
+        subject_id: int = 0,
+        cover: str = "",
+        notes: Sequence[str] = (),
+    ) -> Reply:
+        """把一个已经确定的地址落库，并回一张结果卡。"""
+
+        deps = self._deps
+        conf = deps.conf
         url = normalize_feed_url(target, rsshub_base=conf.rsshub_base, mikan_base=conf.mikan_base)
         if not url:
             return Reply.plain("这个地址我看不懂，给一个 http(s) 开头的 RSS 链接吧。")
 
+        excludes = expand_excludes(await excludes_for(deps, umo))
         ok, detail, count = await deps.hub.rss.probe(url)
         sub = Subscription(
             id=0,
@@ -117,6 +321,7 @@ class SubscriptionService:
             url=url,
             enabled=True,
             subject_id=subject_id,
+            excludes=excludes,
             error="" if ok else detail,
         )
         try:
@@ -142,6 +347,10 @@ class SubscriptionService:
             lines.append("订阅仍然建好了，下一轮会自动重试")
         if subject_id:
             lines.append(f"关联条目：bgm.tv/subject/{subject_id}")
+        if excludes:
+            head = "、".join(excludes[:6])
+            tail = f" 等 {len(excludes)} 项" if len(excludes) > 6 else ""
+            lines.append(f"已套用全局排除项：{head}{tail}")
         lines.extend(notes)
         return await self._notice(
             umo,
@@ -167,6 +376,86 @@ class SubscriptionService:
         if uids:
             await deps.store.mark_seen(uids, umo=sub.umo)
         return len(uids)
+
+    # ------------------------------------------------------------------
+    # /sub_exclude
+    # ------------------------------------------------------------------
+    async def excludes(self, umo: str, raw: str) -> Reply:
+        """管理会话级的全局排除项。
+
+        为什么做成「全局」而不是「每条订阅各设一份」：用户想屏蔽的东西
+        （繁体、720p、合集、生肉）几乎不随番剧变化，逐条去设等于让人放弃。
+        这里存一份会话清单，新订阅自动套用，「apply」 还能一次刷到已有订阅上。
+        """
+        deps = self._deps
+        action, value = _split_action(raw)
+        current = list(await excludes_for(deps, umo))
+        words = [word for word in re.split(r"[\s,，、|]+", value) if word]
+
+        if action in {"preset", "预设", "presets"}:
+            return await self._notice(
+                umo,
+                eyebrow="EXCLUDE PRESETS",
+                title="可用的排除预设",
+                subtitle="用 /sub_exclude add <名字> 直接勾上",
+                lines=[f"{name}｜命中：{'、'.join(items)}" for name, items in EXCLUDE_PRESETS],
+                stamp="FILTER",
+            )
+        if action in {"add", "加", "添加", "屏蔽"}:
+            if not words:
+                return Reply.plain(
+                    "用法：/sub_exclude add 繁体 720p，预设名用 /sub_exclude preset 看。"
+                )
+            current = await set_excludes(deps, umo, [*current, *words])
+        elif action in {"del", "delete", "rm", "remove", "删", "删除"}:
+            if not words:
+                return Reply.plain("用法：/sub_exclude del 繁体")
+            drop = {word.lower() for word in words}
+            current = await set_excludes(
+                deps, umo, [item for item in current if item.lower() not in drop]
+            )
+        elif action in {"clear", "清空", "重置"}:
+            current = await set_excludes(deps, umo, ())
+        elif action in {"apply", "同步", "刷新"}:
+            touched = await deps.store.apply_excludes(umo, expand_excludes(current))
+            return await self._notice(
+                umo,
+                eyebrow="EXCLUDE",
+                title=f"已把排除项刷到 {touched} 条订阅",
+                subtitle="之后新建的订阅会自动套用",
+                lines=self._exclude_lines(tuple(current)),
+                stamp="FILTER",
+            )
+        elif action not in {"", "list", "查看", "show"}:
+            return Reply.plain(
+                "用法：/sub_exclude [list|add <词>|del <词>|clear|preset|apply]\n"
+                "add/del 可以一次给多个词，用空格或逗号分隔。"
+            )
+
+        return await self._notice(
+            umo,
+            eyebrow="EXCLUDE",
+            title="全局排除项" if current else "还没有设排除项",
+            subtitle="新建订阅时自动套用；apply 可刷到已有订阅",
+            lines=self._exclude_lines(tuple(current)),
+            stamp="FILTER",
+        )
+
+    @staticmethod
+    def _exclude_lines(chosen: tuple[str, ...]) -> list[str]:
+        """把「勾了什么」和「实际过滤哪些词」分开展示。
+
+        分开是有意的：用户勾的是 「繁体」，真正参与过滤的是 「繁体/繁日/CHT/BIG5」，
+        只显示前者会让人以为漏了写法，只显示后者又看不懂自己勾过什么。
+        """
+        if not chosen:
+            return ["用 /sub_exclude add 繁体 720p 开始，或 /sub_exclude preset 看预设清单。"]
+        expanded = expand_excludes(chosen)
+        lines = [f"已勾选（{len(chosen)}）：{'、'.join(chosen)}"]
+        if len(expanded) != len(chosen):
+            lines.append(f"实际过滤（{len(expanded)}）：{'、'.join(expanded)}")
+        lines.append("命中这些词的发布会被丢掉，大小写不敏感。")
+        return lines
 
     # ------------------------------------------------------------------
     # /unsub /unsub_all
@@ -578,11 +867,50 @@ class SubscriptionService:
     # ------------------------------------------------------------------
     # 给追番流程用的源推荐
     # ------------------------------------------------------------------
+    async def offer_from_match(self, umo: str, match: MatchResult) -> str:
+        """给 「/追番」 之后的「顺手订阅」开一个等序号的会话。
+
+        上游的做法是把三条 RSS 地址原样打印出来，让用户自己复制粘贴到 「/sub」 ——
+        长 URL 在聊天里既会被折行，又会把整条回复顶过转图阈值，最后变成一张
+        没人看得懂的文字图。这里改成跟选源同一套序号流程：卡片照发，
+        后面只跟一行「回复序号订阅」的短提示，地址留在会话里不外露。
+
+        返回值是要附在卡片后面的提示文本；没有可用源时返回空串。
+        """
+        candidates = self.suggest(match)
+        if not candidates:
+            return ""
+        options = tuple(
+            PickOption(index=index, label=label, url=url)
+            for index, (label, url) in enumerate(candidates[:PICK_MAX_OPTIONS], start=1)
+        )
+        subject = match.subject
+        self._deps.picker.open(
+            umo,
+            kind="watch",
+            name=match.title or (subject.display_name if subject is not None else ""),
+            options=options,
+            subject_id=subject.id if subject is not None else 0,
+            cover=subject.image if subject is not None else "",
+        )
+        minutes = max(1, int(PICK_SESSION_SECONDS // 60))
+        return "\n".join(
+            [
+                "想第一时间知道更新？回复序号即可订阅：",
+                *(f"{item.index}. {item.label}" for item in options),
+                f"（{minutes} 分钟内有效；想按字幕组挑就发 /sub {match.title}）",
+            ]
+        )
+
     def suggest(self, match: MatchResult) -> tuple[tuple[str, str], ...]:
         """一部番可用的订阅源候选，「/追番」 之后顺手推荐给用户。"""
 
         conf = self._deps.conf
-        title = match.title
+        # 「MatchResult.title」 在一个源都没命中时返回占位串 「未知番剧」，
+        # 直接拿它去拼动漫花园关键词源，等于让用户订上一条永远搜不到东西的 feed。
+        # 所以这里要求至少有一个「认得出是哪部番」的源。
+        identified = any((match.subject, match.season, match.data_item, match.anime1))
+        title = match.title if identified else ""
         options: list[tuple[str, str]] = []
         if match.mikan_rss:
             label = "Mikan 单番" if match.data_item and match.data_item.mikan_id else "Mikan 搜索"
@@ -659,6 +987,26 @@ class SubscriptionService:
 
     def stats(self) -> dict[str, int]:
         return {"polls": self._polls, "pushed": self._pushed}
+
+
+def _split_action(raw: str) -> tuple[str, str]:
+    """把 「add 繁体 720p」 拆成 (动作, 其余参数)。"""
+
+    tokens = str(raw or "").strip().split(maxsplit=1)
+    action = tokens[0].strip().lower() if tokens else ""
+    return action, tokens[1].strip() if len(tokens) > 1 else ""
+
+
+def _group_detail(group: MikanGroup) -> str:
+    """选源列表里那行小字：最后更新日期 + 一条真实发布标题。
+
+    给样例标题是刻意的 —— 组名看不出简繁和画质，一条真实标题能看出来。
+    """
+    parts = [
+        f"更新 {group.updated}" if group.updated else "",
+        group.samples[0] if group.samples else "",
+    ]
+    return " · ".join(part for part in parts if part)
 
 
 def _stamp(moment: float) -> str:

@@ -409,6 +409,53 @@ class Store:
 
         await self._run(_work)
 
+    async def set_subscription_filters(
+        self,
+        sub_id: int,
+        *,
+        keywords: Iterable[str] | None = None,
+        excludes: Iterable[str] | None = None,
+    ) -> None:
+        """单独改一条订阅的白名单 / 黑名单。
+
+        跟 「set_subscription_state」 分开：那个方法管轮询状态（谁都能改），
+        这个管用户意图（只该由指令和 WebUI 改），混在一起容易误伤。
+        """
+        payload: dict[str, Any] = {}
+        if keywords is not None:
+            payload["keywords"] = _join(tuple(keywords))
+        if excludes is not None:
+            payload["excludes"] = _join(tuple(excludes))
+        if not payload:
+            return
+
+        def _work() -> None:
+            conn = self._connection()
+            assignments = ", ".join(f"{key}=?" for key in payload)
+            conn.execute(
+                f"UPDATE subscriptions SET {assignments} WHERE id=?",
+                [*payload.values(), sub_id],
+            )
+            conn.commit()
+
+        await self._run(_work)
+
+    async def apply_excludes(self, umo: str, excludes: Iterable[str]) -> int:
+        """把一份黑名单批量刷到某会话的全部订阅上，返回受影响条数。
+
+        为什么要批量：全局排除项是「这个群不想看繁体和 720p」这种会话级口味，
+        改了之后老订阅也该跟着生效，否则用户还得逐条重订一遍。
+        """
+        words = _join(tuple(excludes))
+
+        def _work() -> int:
+            conn = self._connection()
+            cursor = conn.execute("UPDATE subscriptions SET excludes=? WHERE umo=?", (words, umo))
+            conn.commit()
+            return int(cursor.rowcount or 0)
+
+        return await self._run(_work)
+
     async def set_subscriptions_enabled(self, umo: str, enabled: bool) -> int:
         def _work() -> int:
             conn = self._connection()

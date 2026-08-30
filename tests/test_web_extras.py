@@ -1,0 +1,171 @@
+"""WebUI 新增接口的行为锁定单测（选源 / 全局排除项）。
+
+这三个接口是「聊天侧的选源与排除」在面板上的镜像，为什么要单独锁：
+
+* 面板与指令必须看到**同一份**候选清单，否则用户在面板点的字幕组
+  和聊天里回的序号会指向不同源；
+* 「排除项」写库存的是**预设名**而不是展开词，回显要能重新勾上复选框；
+* 「回写到已有订阅」是批量覆盖，默认必须关，只有显式 「apply」 才动老订阅。
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any, cast
+
+import pytest
+
+from nexus.services.base import PREF_EXCLUDES
+from nexus.services.picker import PickOption
+from nexus.web.api import NexusService, NexusWebError
+
+
+class _FakeStore:
+    """只实现被测路径用到的三个方法的假 store。
+
+    不用真 「NexusStore」：这几个接口的行为跟 SQLite 无关，
+    真库会把测试变成慢的集成测试，也掩盖掉「到底读写了哪个偏好键」。
+    """
+
+    def __init__(self) -> None:
+        self.prefs: dict[tuple[str, str], str] = {}
+        self.applied: list[tuple[str, tuple[str, ...]]] = []
+
+    async def get_pref(self, umo: str, key: str) -> str:
+        return self.prefs.get((umo, key), "")
+
+    async def set_pref(self, umo: str, key: str, value: str) -> None:
+        self.prefs[(umo, key)] = value
+
+    async def apply_excludes(self, umo: str, words: Any) -> int:
+        self.applied.append((umo, tuple(words)))
+        return 2
+
+
+class _FakeSubs:
+    """假订阅服务，只暴露 「pick_options」。"""
+
+    def __init__(self, options: tuple[PickOption, ...]) -> None:
+        self.options = options
+        self.calls: list[str] = []
+
+    async def pick_options(self, name: str) -> tuple[PickOption, ...]:
+        self.calls.append(name)
+        return self.options
+
+
+def _service(options: tuple[PickOption, ...] = ()) -> tuple[NexusService, _FakeStore, _FakeSubs]:
+    """拼一个只够跑这三个接口的 「NexusService」。
+
+    「Deps」 / 「Wiring」 都是字段很多的 dataclass，这里用 「SimpleNamespace」
+    顶上 —— 「NexusService」 只按名字取属性，不做类型校验，
+    这样新增无关字段时本测试不会跟着塌。
+    """
+    store = _FakeStore()
+    subs = _FakeSubs(options)
+    deps = SimpleNamespace(store=store, activity=SimpleNamespace(info=lambda *a, **k: None))
+    wiring = SimpleNamespace(subs=subs)
+    return NexusService(cast(Any, deps), cast(Any, wiring)), store, subs
+
+
+_OPTIONS = (
+    PickOption(
+        index=1,
+        label="Mikan 单番",
+        url="https://mikanani.me/RSS/Bangumi?bangumiId=3883",
+        detail="整部番所有字幕组",
+        group_id=0,
+        tags=("全部",),
+    ),
+    PickOption(
+        index=2,
+        label="雪飘工作室",
+        url="https://mikanani.me/RSS/Bangumi?bangumiId=3883&subgroupid=6",
+        detail="最后更新 2026/08/29",
+        group_id=6,
+        tags=("字幕组",),
+    ),
+)
+
+
+class TestSubSources:
+    async def test_列出候选并保留序号与分组信息(self) -> None:
+        """面板要靠 「index」 对齐聊天侧序号，靠 「url」 直接下单，两者都不能丢。"""
+
+        service, _store, subs = _service(_OPTIONS)
+        payload = await service.sub_sources(" 名侦探光之美少女 ")
+
+        assert subs.calls == ["名侦探光之美少女"]
+        assert payload["name"] == "名侦探光之美少女"
+        assert payload["total"] == 2
+        assert [item["index"] for item in payload["items"]] == [1, 2]
+        assert payload["items"][1]["group_id"] == 6
+        assert payload["items"][1]["url"].endswith("subgroupid=6")
+
+    async def test_番名为空直接报错而不去打Mikan(self) -> None:
+        """空关键词打过去只会拿到一堆无关搜索结果，属于必须拦在前端之前的输入错误。"""
+
+        service, _store, subs = _service(_OPTIONS)
+        with pytest.raises(NexusWebError):
+            await service.sub_sources("   ")
+        assert subs.calls == []
+
+
+class TestExcludes:
+    async def test_预设清单始终返回且未选会话时不读偏好(self) -> None:
+        """面板一进来还没选会话，也得能把复选框先渲染出来。"""
+
+        service, _store, _subs = _service()
+        payload = await service.excludes("")
+
+        assert payload["chosen"] == []
+        assert payload["expanded"] == []
+        names = [preset["name"] for preset in payload["presets"]]
+        assert "繁体" in names
+        assert all(preset["words"] for preset in payload["presets"])
+
+    async def test_回显勾选原始名并附带展开结果(self) -> None:
+        """存原始名是为了能重新勾上复选框，展开结果只用于让用户看清实际过滤词。"""
+
+        service, store, _subs = _service()
+        store.prefs[("umo-a", PREF_EXCLUDES)] = "繁体|我方自定义"
+        payload = await service.excludes("umo-a")
+
+        assert payload["chosen"] == ["繁体", "我方自定义"]
+        assert "CHT" in payload["expanded"]
+        assert "我方自定义" in payload["expanded"]
+
+
+class TestSaveExcludes:
+    async def test_默认不回写已有订阅(self) -> None:
+        """改全局清单不等于要覆盖老订阅的过滤词，批量覆盖必须是显式一次点击。"""
+
+        service, store, _subs = _service()
+        payload = await service.save_excludes({"umo": "umo-a", "values": ["繁体", "  ", "繁体"]})
+
+        assert payload["ok"] is True
+        assert payload["chosen"] == ["繁体"]
+        assert payload["applied"] == 0
+        assert store.applied == []
+        assert store.prefs[("umo-a", PREF_EXCLUDES)] == "繁体"
+
+    async def test_显式apply时用展开后的词回写(self) -> None:
+        """回写进订阅的必须是展开词，存预设名等于没过滤。"""
+
+        service, store, _subs = _service()
+        payload = await service.save_excludes(
+            {"umo": "umo-a", "values": ["720p"], "apply": True},
+        )
+
+        assert payload["applied"] == 2
+        assert store.applied and store.applied[0][0] == "umo-a"
+        assert "1280x720" in store.applied[0][1]
+
+    async def test_缺会话或值不是数组都要拒绝(self) -> None:
+        """字符串会被逐字符拆成排除项，是最容易踩的一种前端 bug。"""
+
+        service, _store, _subs = _service()
+        with pytest.raises(NexusWebError):
+            await service.save_excludes({"values": []})
+        with pytest.raises(NexusWebError):
+            await service.save_excludes({"umo": "umo-a", "values": "繁体"})

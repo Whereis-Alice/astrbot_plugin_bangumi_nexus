@@ -591,6 +591,26 @@ async function loadSubs() {
   state.subs = await apiGet("subs", { umo: state.umo });
 }
 
+/**
+ * 全局排除项：可勾的预设清单 + 这个会话已经勾上的。
+ *
+ * 后端存的是**预设名**而不是展开后的关键词，所以回显时要把「不在预设表里的」
+ * 归到自定义输入框 —— 否则用户自己加的词会在界面上凭空消失。
+ */
+async function loadExcludes() {
+  const payload = await apiGet("excludes", { umo: state.umo || "" });
+  const presets = Array.isArray(payload?.presets) ? payload.presets : [];
+  const names = new Set(presets.map((row) => row.name));
+  const chosen = Array.isArray(payload?.chosen) ? payload.chosen.map(String) : [];
+  excludeDraft = {
+    presets,
+    picked: chosen.filter((name) => names.has(name)),
+    custom: chosen.filter((name) => !names.has(name)).join(" "),
+    saved: "",
+  };
+  excludeDraft.saved = JSON.stringify(excludeValues());
+}
+
 const LOADERS = {
   overview: async () => {
     await Promise.all([loadOverview(), loadLogs()]);
@@ -605,7 +625,7 @@ const LOADERS = {
   },
   subs: async () => {
     await ensureSessions();
-    await loadSubs();
+    await Promise.all([loadSubs(), loadExcludes()]);
   },
   targets: async () => {
     await ensureSessions();
@@ -1264,6 +1284,131 @@ const SUB_HINTS = [
   ["只写番名", "葬送的芙莉莲"],
 ];
 
+/** 自定义排除词：逗号 / 空格 / 换行都算分隔符，去空去重（忽略大小写）。 */
+function excludeCustomWords() {
+  const seen = new Set();
+  const words = [];
+  for (const raw of String(excludeDraft.custom || "").split(/[,，、\s]+/)) {
+    const word = raw.trim();
+    const key = word.toLowerCase();
+    if (!word || seen.has(key)) continue;
+    seen.add(key);
+    words.push(word);
+  }
+  return words;
+}
+
+/** 提交给后端的原始清单：预设名在前，自定义词在后。 */
+function excludeValues() {
+  return [...excludeDraft.picked, ...excludeCustomWords()];
+}
+
+/**
+ * 本地展开一次，只为了让用户看见「实际拿去比对的词」。
+ *
+ * 展开规则与后端 「expand_excludes」 一致，而预设词表本身也是后端下发的，
+ * 所以勾一下就能立刻看到效果，不必为一个预览再跑一趟接口。
+ */
+function excludeExpanded() {
+  const table = new Map(excludeDraft.presets.map((row) => [row.name, row.words || []]));
+  const seen = new Set();
+  const words = [];
+  for (const name of excludeValues()) {
+    for (const raw of table.get(name) || [name]) {
+      const word = String(raw).trim();
+      const key = word.toLowerCase();
+      if (!word || seen.has(key)) continue;
+      seen.add(key);
+      words.push(word);
+    }
+  }
+  return words;
+}
+
+const excludeDirty = () => JSON.stringify(excludeValues()) !== excludeDraft.saved;
+
+function sourcePickRow(item) {
+  const tags = (item.tags || []).map((text) => chip(text)).join("");
+  return (
+    `<div class="list-row">` +
+    `<div class="list-main">` +
+    `<span class="list-title"><span class="text">${esc(item.index + ". " + item.label)}</span>${tags}</span>` +
+    (item.detail ? `<span class="list-sub">${esc(item.detail)}</span>` : "") +
+    `<span class="list-sub mono">${esc(item.url)}</span>` +
+    `</div>` +
+    `<div class="list-actions">` +
+    btn("订阅这个", {
+      act: "sub-source-pick",
+      arg: String(item.index),
+      glyph: "rss",
+      kind: "primary",
+      sm: true,
+    }) +
+    `<a class="icon-btn xs" href="${attr(item.url)}" target="_blank" rel="noopener noreferrer" title="先在浏览器里看一眼这个源">${icon("link", "sm")}</a>` +
+    `</div></div>`
+  );
+}
+
+/** 选源候选面板。没拉过就不占版面，所以返回空串。 */
+function sourcesPanel() {
+  if (!subSources.items.length) return "";
+  return panel({
+    eyebrow: "pick",
+    title: "挑一个字幕组",
+    desc: "这份候选跟聊天里 /sub 的选源列表完全一致：第 1 项是整部番的合并源（所有组都收），其余每项只收一个组 —— 只订一个组，一集就只推一条。",
+    actions: btn("收起", { act: "sub-sources-clear", kind: "ghost", sm: true }),
+    body: `<div class="list">${subSources.items.map(sourcePickRow).join("")}</div>`,
+    foot: badge(subSources.name + " · " + num(subSources.items.length) + " 个候选"),
+  });
+}
+
+/** 全局排除项面板。预设表拉不到（接口失败）时整块隐藏，避免只剩一个空框。 */
+function excludePanel() {
+  if (!excludeDraft.presets.length) return "";
+  const expanded = excludeExpanded();
+  const dirty = excludeDirty();
+  return panel({
+    eyebrow: "filter",
+    title: "全局排除项",
+    desc: "勾上的词会自动加到这个会话「之后新增」的订阅上。同一个字幕组常把简繁、多种画质各发一遍，排掉多余的写法就不会重复推送。",
+    actions:
+      btn(dirty ? "保存改动" : "保存", {
+        act: "exclude-save",
+        glyph: "check",
+        kind: dirty ? "primary" : "ghost",
+        sm: true,
+      }) +
+      btn("回写到已有订阅", {
+        act: "exclude-apply",
+        glyph: "refresh",
+        sm: true,
+        title: "把这份清单覆盖到该会话现有的每条订阅上",
+      }),
+    body:
+      `<div class="chips">` +
+      excludeDraft.presets
+        .map((row) =>
+          switchHtml(row.name, excludeDraft.picked.includes(row.name), {
+            act: "exclude-toggle",
+            arg: row.name,
+          }),
+        )
+        .join("") +
+      `</div>` +
+      `<div class="field" style="margin-top:var(--gap)">` +
+      `<span class="field-label">自定义排除词</span>` +
+      `<input type="text" placeholder="逗号或空格分隔，例如：内嵌 修复 v2" value="${attr(excludeDraft.custom)}" data-live="exclude-custom" data-enter="exclude-save" />` +
+      `<span class="field-hint">大小写不敏感，命中标题任意位置就跳过那一条。改完记得按回车或点「保存」。</span>` +
+      `</div>` +
+      (expanded.length
+        ? `<div class="chips" style="margin-top:var(--gap)">${expanded.map((word) => chip(word, "mono")).join("")}</div>`
+        : note("现在没有任何排除项，抓到的条目会原样推送。")),
+    foot:
+      badge("勾选 " + num(excludeValues().length) + " 项 → 实际过滤 " + num(expanded.length) + " 个词") +
+      (dirty ? badge("有未保存的改动", "warn") : ""),
+  });
+}
+
 RENDERERS.subs = () => {
   const items = state.subs.items || [];
   if (!state.sessions.length && !items.length) {
@@ -1296,6 +1441,12 @@ RENDERERS.subs = () => {
       `<input type="text" style="width:170px" placeholder="名称（必填）" value="${attr(state.subDraft.name)}" data-live="sub-name" data-enter="sub-add" />` +
       `<input type="text" class="grow" placeholder="RSS 地址或简写（可留空）" value="${attr(state.subDraft.value)}" data-live="sub-value" data-enter="sub-add" />` +
       btn("添加", { act: "sub-add", glyph: "plus", kind: "primary", sm: true }) +
+      btn("列字幕组", {
+        act: "sub-sources",
+        glyph: "search",
+        sm: true,
+        title: "按名称去 Mikan 查这部番有哪些字幕组，挑一个订，避免一集被推七八遍",
+      }) +
       btn("先测一下", { act: "sub-test", glyph: "stethoscope", sm: true }) +
       `</div>` +
       `<div class="notes">` +
@@ -1324,22 +1475,35 @@ RENDERERS.subs = () => {
       btn("导入到当前会话", { act: "import-run", glyph: "upload", sm: true }),
   });
 
+  // 这两块按需出现：没列过字幕组、或排除项预设拉不到时都返回空串。
+  const pickPanel = sourcesPanel();
+  const filterPanel = excludePanel();
+
   return (
     viewbar(
       "订阅",
       "共 " + num(state.subs.total || items.length) + " 条 · " + shortUmo(state.umo),
       sessionPicker() + btn("刷新", { act: "reload", glyph: "refresh", sm: true, kind: "ghost" }),
     ) +
-    `<div class="deck wide">${listPanel}${addPanel}${backupPanel}</div>`
+    (pickPanel ? `<div class="deck wide" style="margin-bottom:var(--gap)">${pickPanel}</div>` : "") +
+    `<div class="deck wide">${listPanel}${addPanel}${filterPanel}${backupPanel}</div>`
   );
 };/* --- 视图：播报 ----------------------------------------------------------- */
 
-// 以下三个模块级状态被前面的视图引用（订阅页的操作回执、导出文本、手动播报的星期）。
-// 放在这里而不是 state 里，是因为它们都是「用完即弃」的一次性回显，
-// 不该跟着界面偏好一起被持久化到后端。
+// 以下几个模块级状态被前面的视图引用（订阅页的操作回执、导出文本、手动播报的星期、
+// 选源候选、排除项草稿）。放在这里而不是 state 里，是因为它们都是「用完即弃」的
+// 一次性中间态，不该跟着界面偏好一起被持久化到后端。
 let subMessage = "";
 let exportText = "";
 let pushWeekday = 0;
+
+// 选源候选表：点一次「列字幕组」拉一次，订完或换会话就丢。
+// 同样不进 state —— 重新进面板时应该是干净的，而不是弹出上次的半截列表。
+let subSources = { name: "", items: [] };
+
+// 全局排除项草稿。预设勾选与自定义词分开存（界面上一个是开关、一个是输入框），
+// 「saved」 是落库那一刻的签名，用来判断有没有未保存的改动。
+let excludeDraft = { presets: [], picked: [], custom: "", saved: "" };
 
 const WEEKDAY_OPTIONS = [
   ["0", "按今天"],
@@ -1941,6 +2105,29 @@ async function subOp(op, extra = {}, ok = "") {
   return result;
 }
 
+/**
+ * 保存全局排除项。
+ *
+ * 「apply」 为真时才回写到已有订阅 —— 那是一次批量覆盖（每条订阅原有的排除词
+ * 会被整份替换），必须由用户显式点那个按钮，不能顺手跟普通保存一起发生。
+ */
+async function saveExcludes(apply) {
+  if (!state.umo) {
+    toast("先在右上角选一个会话，排除项是按会话存的", "warn");
+    return;
+  }
+  const values = excludeValues();
+  const result = await apiPost("excludes", { umo: state.umo, values, apply });
+  excludeDraft.saved = JSON.stringify(values);
+  if (apply) {
+    await loadSubs();
+    toast("已回写到 " + num(result?.applied || 0) + " 条订阅", "ok");
+  } else {
+    toast("排除项已保存，之后新增的订阅会自动带上", "ok");
+  }
+  render("subs");
+}
+
 /** 导出：umo 为空串表示导出全部会话。 */
 async function exportTo(umo) {
   const payload = await apiGet("export", { umo });
@@ -2102,6 +2289,7 @@ const ACTIONS = {
     // 换会话等于换了一整套上下文，上一会话的搜索结果 / 回执留着只会误导。
     state.search = { keyword: "", items: [], busy: false };
     watchSuggest = { title: "", items: [] };
+    subSources = { name: "", items: [] };
     subMessage = "";
     exportText = "";
     saveState();
@@ -2228,6 +2416,61 @@ const ACTIONS = {
       return;
     }
     await subOp("test", { value: token });
+  },
+
+  /* — 订阅：选源 — */
+  "sub-sources": async () => {
+    const name = state.subDraft.name.trim();
+    if (!name) {
+      toast("先在「名称」里填番名 —— 字幕组是按番名去 Mikan 查的", "warn");
+      return;
+    }
+    const payload = await apiGet("subs/sources", { name });
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    subSources = { name: payload?.name || name, items };
+    if (!items.length) {
+      toast("Mikan 上没找到「" + name + "」，换个写法再试（日文原名通常最准）", "warn", 6000);
+    }
+    render("subs");
+  },
+
+  "sub-sources-clear": () => {
+    subSources = { name: "", items: [] };
+    render("subs");
+  },
+
+  "sub-source-pick": async (arg) => {
+    const option = subSources.items.find((row) => String(row.index) === String(arg));
+    if (!option) {
+      toast("这个候选已经不在列表里了，重新列一次", "warn");
+      return;
+    }
+    // 订阅名沿用「名称」框里的番名，这样之后写番名就能 /unsub。
+    const name = (state.subDraft.name || subSources.name).trim();
+    const result = await subOp("add", { value: (name + " " + option.url).trim() });
+    if (result?.ok) {
+      subSources = { name: "", items: [] };
+      state.subDraft = { value: "", name: "" };
+      render("subs");
+    }
+  },
+
+  /* — 订阅：全局排除项 — */
+  "exclude-toggle": (arg, node) => {
+    const name = String(arg || "");
+    const picked = excludeDraft.picked.filter((item) => item !== name);
+    if (node?.checked) picked.push(name);
+    excludeDraft.picked = picked;
+    render("subs");
+  },
+
+  "exclude-save": () => saveExcludes(false),
+
+  "exclude-apply": async () => {
+    if (!window.confirm("把这份排除清单覆盖到该会话现有的每条订阅上？各条订阅原来单独设的排除词会被替换。")) {
+      return;
+    }
+    await saveExcludes(true);
   },
 
   /* — 备份与迁移 — */
@@ -2401,6 +2644,11 @@ const LIVE_SETTERS = {
   },
   "import-text": (value) => {
     state.importText = value;
+  },
+  "exclude-custom": (value) => {
+    // 刻意不重渲染：会把正在打字的输入框换掉。展开预览等下一次渲染再更新，
+    // 「保存」按钮则始终可点，所以不会出现「改了却存不下去」。
+    excludeDraft.custom = value;
   },
   "targets-draft": (value) => {
     state.targetsDraft = value;

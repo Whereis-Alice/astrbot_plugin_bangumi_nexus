@@ -1080,6 +1080,63 @@ def build_feed_card(
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="FEED"))
 
 
+def build_picker_card(
+    theme: Theme | str,
+    *,
+    title: str,
+    options: Sequence[tuple[str, str, str, str]],
+    subtitle: str = "",
+    cover: str = "",
+    hint: str = "",
+    excludes: Sequence[str] = (),
+    width: int = CARD_WIDTH,
+    version: str = "",
+) -> str:
+    """选源卡：把候选字幕组编号列出来，等用户回一个数字。
+
+    「options」 每项为 「(序号, 组名, 补充说明, 标记)」，「标记」 是简繁 / 画质 / 片源
+    这类差异 —— 用户在这一步看清差异，才不会订完才发现被同一集刷四遍。
+
+    这张卡是一次性的中间过程，选完由 main.py 撤回，所以不放 footer 链接。
+    """
+    resolved = theme if isinstance(theme, Theme) else resolve_theme(theme)
+    rows = [
+        (idx, clip(name, 40), clip(note, 60), clip(tag, 24)) for idx, name, note, tag in options
+    ]
+    blocks = []
+    if cover:
+        blocks.append(
+            _block("封面", '<div class="tile plain">' + _thumb(cover, title, size="lg") + "</div>")
+        )
+    blocks.append(
+        _block(
+            "可选源",
+            _rows(rows) or _empty("这部番在 Mikan 上还没有字幕组发布"),
+            hint=f"{len(rows)} 个",
+        )
+    )
+    if excludes:
+        blocks.append(
+            _block("已生效的排除项", _chips(excludes, variant="ghost", limit=12), hint="全局")
+        )
+    blocks.append(
+        _block(
+            "怎么选",
+            f'<div class="para">{esc(hint or "直接回复序号即可，比如 1")}</div>',
+        )
+    )
+    hero = _hero(
+        eyebrow="PICK A SOURCE",
+        title=clip(title, 34) or "挑一个更新源",
+        sub=subtitle or "回复序号完成订阅",
+        stats=(_stat(len(rows), "SOURCES", accent=True),),
+        small=text_width(title) > 30,
+    )
+    body = f'<div class="body">{"".join(blocks)}</div>'
+    footer = _footer("番剧中枢", "选完这条列表会自动撤回", (version,) if version else ())
+    return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="PICK"))
+
+
 def build_notice_card(
     theme: Theme | str,
     *,
@@ -1326,6 +1383,7 @@ __all__ = [
     "build_gacha_card",
     "build_help_card",
     "build_notice_card",
+    "build_picker_card",
     "build_recommend_card",
     "build_search_card",
     "build_season_card",

@@ -88,8 +88,9 @@ class Matcher:
             season_entry = season_pair[0]
 
         mikan_rss = ""
-        if data_item is not None and data_item.mikan_id:
-            mikan_rss = mikan_bangumi_feed(self._mikan_base, data_item.mikan_id)
+        mikan_id = str(data_item.mikan_id or "") if data_item is not None else ""
+        if mikan_id:
+            mikan_rss = mikan_bangumi_feed(self._mikan_base, mikan_id)
         elif query:
             mikan_rss = mikan_search_feed(self._mikan_base, query)
             notes.append("Mikan 用的是关键词搜索源，可能混入同名作品")
@@ -101,6 +102,7 @@ class Matcher:
             season=season_entry,
             age=resolved.get("age"),  # type: ignore[arg-type]
             moegirl=resolved.get("moegirl"),  # type: ignore[arg-type]
+            mikan_id=mikan_id,
             mikan_rss=mikan_rss,
             confidence=confidence,
             notes=tuple(notes),

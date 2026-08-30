@@ -14,18 +14,20 @@ from typing import Any
 
 from ..activity import ActivityLog
 from ..config import NexusConfig
-from ..constants import COVER_HERO_EDGE, COVER_THUMB_EDGE
+from ..constants import COVER_HERO_EDGE, COVER_THUMB_EDGE, EXCLUDE_PRESET_BY_NAME
 from ..http import HttpClient
 from ..render import CardEngine, CardRequest, RenderedCard, plain_lines
 from ..sources.hub import SourceHub
 from ..store import Store
 from .matcher import Matcher
+from .picker import PickRegistry
 
 PREF_THEME = "card_theme"
 PREF_RENDERER = "card_renderer"
 PREF_TEMPLATE = "search_template"
 PREF_DAILY = "daily_digest"
 PREF_TARGET = "push_target"
+PREF_EXCLUDES = "feed_excludes"
 
 
 @dataclass(slots=True)
@@ -45,6 +47,9 @@ class Deps:
     matcher: Matcher
     activity: ActivityLog
     config: Callable[[], NexusConfig]
+    #: 「等用户回序号」的选源会话表。放在 「Deps」 里而不是各服务自己持有，
+    #: 是因为发起选源的是订阅服务、消费选择的是 main.py 的消息钩子，两边要看同一张表。
+    picker: PickRegistry = field(default_factory=PickRegistry)
 
     @property
     def conf(self) -> NexusConfig:
@@ -122,6 +127,50 @@ async def style_for(deps: Deps, umo: str) -> tuple[str, str]:
     except Exception:  # noqa: BLE001 - 偏好读不出来不该拖垮回复
         pass
     return theme, renderer
+
+
+def expand_excludes(values: Iterable[str]) -> tuple[str, ...]:
+    """把用户勾的排除项展开成真正用于过滤的关键词。
+
+    输入既接受预设名（「繁体」「720p」），也接受任意自定义词。预设名会展开成
+    一组同义写法 —— 同一件事字幕组能写出 「繁体」「繁日」「CHT」「BIG5」 四种，
+    只存字面量等于没过滤。展开后去重并保持勾选顺序，便于在 WebUI 里回显。
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        name = str(raw or "").strip()
+        if not name:
+            continue
+        for word in EXCLUDE_PRESET_BY_NAME.get(name, (name,)):
+            key = word.strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                result.append(word.strip())
+    return tuple(result)
+
+
+async def excludes_for(deps: Deps, umo: str) -> tuple[str, ...]:
+    """取会话级的全局排除项（用户勾选的原始名字，未展开）。
+
+    存原始名而不是展开结果：WebUI 要能把复选框重新勾上，
+    而且预设词表以后补充同义写法时，老订阅也能跟着受益。
+    """
+    if not umo:
+        return ()
+    try:
+        raw = await deps.store.get_pref(umo, PREF_EXCLUDES)
+    except Exception:  # noqa: BLE001 - 偏好读不出来只是少一层过滤，不该拖垮回复
+        return ()
+    return tuple(part for part in str(raw or "").split("|") if part.strip())
+
+
+async def set_excludes(deps: Deps, umo: str, values: Iterable[str]) -> tuple[str, ...]:
+    """写回会话级全局排除项，返回落库后的清单。"""
+
+    chosen = tuple(dict.fromkeys(str(item or "").strip() for item in values if str(item).strip()))
+    await deps.store.set_pref(umo, PREF_EXCLUDES, "|".join(chosen))
+    return chosen
 
 
 async def template_for(deps: Deps, umo: str) -> str:

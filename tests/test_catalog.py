@@ -89,3 +89,16 @@ class TestSyncWithMain:
         for cmd in catalog.all_commands():
             for alias in cmd.aliases:
                 assert f'"{alias}"' in MAIN_SOURCE, f"{cmd.name} 的别名 {alias} 未注册"
+
+    def test_注册的别名都写进了目录(self) -> None:
+        """反向核对：main.py 里 alias 集合的每个别名都要出现在帮助卡上。
+
+        少了这条方向，「代码里悄悄加了个中文别名但帮助卡没写」就查不出来，
+        用户永远发现不了这个入口。
+        """
+
+        registered: set[str] = set()
+        for block in re.findall(r"alias=\{([^}]*)\}", MAIN_SOURCE):
+            registered.update(re.findall(r'"([^"]+)"', block))
+        documented = {alias for cmd in catalog.all_commands() for alias in cmd.aliases}
+        assert sorted(registered - documented) == []

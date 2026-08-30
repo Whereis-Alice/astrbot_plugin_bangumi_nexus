@@ -3,7 +3,8 @@
 锁的是三个实机问题：
 1. bangumi-data 未来月份 404 被当故障重试并刷 error 日志；
 2. AGE 站 Cloudflare 403 被反复重试，每次刷新白等好几秒；
-3. 長門番堂 证书过期时报「网络失败」，看不出真实原因。
+3. 長門番堂 证书过期时报「网络失败」，看不出真实原因；
+4. 長門番堂 证书链不全时整条「新番数据」链路哑掉，且不能因此放宽所有站点。
 """
 
 from __future__ import annotations
@@ -18,7 +19,9 @@ from nexus.http import (
     FetchError,
     HttpClient,
     browser_headers,
+    host_of,
     is_ssl_error,
+    tls_relaxed,
 )
 
 
@@ -118,4 +121,63 @@ async def test_500_仍然重试() -> None:
     with pytest.raises(FetchError):
         await http.fetch_text("https://example.com/boom", retries=2)
     assert recorder.calls == 3
+    await http.close()
+
+
+def test_host_of_去端口并小写() -> None:
+    """宽松名单是按主机名匹配的，端口和大小写必须先规整掉。"""
+    assert host_of("https://YUC.wiki:8443/2026/07") == "yuc.wiki"
+    assert host_of("not a url") == ""
+
+
+def test_tls_relaxed_只放宽名单内主机及其子域() -> None:
+    """锁死「后缀匹配要带点」这条：否则 「evilyuc.wiki」 也会被当成自家子域放行。"""
+    assert tls_relaxed("https://yuc.wiki/2026/07") is True
+    assert tls_relaxed("https://www.yuc.wiki/x") is True
+    assert tls_relaxed("https://evilyuc.wiki/x") is False
+    assert tls_relaxed("https://bgm.tv/subject/1") is False
+
+
+class _SslThenOk:
+    """第一次握手抛证书错误，之后正常返回 —— 模拟「安全池失败、宽松池成功」。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.calls += 1
+        raise httpx.ConnectError(
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed:"
+            " unable to get local issuer certificate"
+        )
+
+
+@pytest.mark.asyncio
+async def test_名单内站点证书异常时降级重试一次() -> None:
+    """長門番堂 常年只挂半条证书链，降级一次就能救回整条新番数据链路。"""
+    http = HttpClient(max_retries=0)
+    secure = _SslThenOk()
+    http._client = httpx.AsyncClient(transport=httpx.MockTransport(secure))
+    http._insecure_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text="<html>ok</html>"))
+    )
+    text = await http.fetch_text("https://yuc.wiki/2026/07")
+    assert "ok" in text
+    assert secure.calls == 1  # 安全池只试一次，之后直接走宽松池
+    await http.close()
+
+
+@pytest.mark.asyncio
+async def test_名单外站点证书异常不降级() -> None:
+    """降级是给人工确认过的公开只读站点开的口子，绝不能推广到全站。"""
+    http = HttpClient(max_retries=0)
+    secure = _SslThenOk()
+    http._client = httpx.AsyncClient(transport=httpx.MockTransport(secure))
+    http._insecure_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text="leak"))
+    )
+    with pytest.raises(FetchError) as caught:
+        await http.fetch_text("https://bgm.tv/subject/1")
+    assert caught.value.ssl_error is True
+    assert secure.calls == 1
     await http.close()

@@ -1,7 +1,7 @@
 {
   "metadata": {
     "display_name": "Bangumi Nexus",
-    "short_desc": "An all-in-one anime companion: 41 chat commands plus a dashboard page for search, watchlists, feeds, broadcasts and gacha.",
+    "short_desc": "An all-in-one anime companion: 42 chat commands plus a dashboard page for search, watchlists, feeds, broadcasts and gacha.",
     "desc": "Bangumi Nexus merges Bangumi, bangumi-data, anime1.me, Nagato Bandou, AGE, Moegirlpedia, Mikan and RSSHub into one cross-source anime index: subject search and the daily calendar, season tables, watchlists with progress tracking, RSS and Mikan subscriptions, a scheduled new-episode broadcast that the AstrBot persona can narrate, random gacha picks and AutoBangumi webhook intake - all rendered with six polished card themes and managed from a dashboard page."
   },
   "config": {
@@ -78,6 +78,10 @@
       "description": "Turn long replies into cards",
       "hint": "Replies longer than 200 characters or containing several lines are sent as an image instead, to avoid flooding the chat."
     },
+    "show_watch_text": {
+      "description": "Append a tappable watch link under cards",
+      "hint": "Cards are images, so links drawn inside them are not clickable. When on, a short plain-text link is sent right after the card; turn it off to send the image only."
+    },
     "push_enabled": {
       "description": "Enable the daily broadcast",
       "hint": "Pushes the today-on-air card to the target sessions below on a schedule."
@@ -151,6 +155,10 @@
     "rss_first_poll_silent": {
       "description": "Skip history on a feed's first poll",
       "hint": "Strongly recommended: otherwise a fresh subscription replays its whole backlog immediately."
+    },
+    "rss_pick_source": {
+      "description": "Ask which fansub group to follow",
+      "hint": "When on, «/sub <title>» first lists the fansub groups Mikan has for that show and only subscribes after you reply with a number, which avoids duplicate pushes from every group. When off, the keyword search source is used instead."
     },
     "rss_history_days": {
       "description": "Days to keep deduplication records"

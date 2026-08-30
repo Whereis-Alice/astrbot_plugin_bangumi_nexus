@@ -1,7 +1,7 @@
 {
   "metadata": {
     "display_name": "番剧中枢",
-    "short_desc": "42 条指令 + Dashboard 面板的一站式番剧助手：查番、追番、订阅、播报、抽番。",
+    "short_desc": "41 条指令 + Dashboard 面板的一站式番剧助手：查番、追番、订阅、播报、抽番。",
     "desc": "把 Bangumi、bangumi-data、anime1.me、长门番堂、AGE 动漫、萌娘百科、Mikan 与 RSSHub 汇成一份跨源番剧索引：条目搜索与每日放送、季度新番表、追番清单与进度、RSS / Mikan 订阅推送、每日新番播报（可走 AstrBot 人格转述）、随机抽番与 AutoBangumi Webhook 接入，全部配六套高级卡片主题与 Dashboard 管理页。"
   },
   "config": {
@@ -228,9 +228,9 @@
     },
     "gacha_source": {
       "description": "抽番数据来源",
-      "hint": "yuc = 長門番堂季度新番表（含制作组 / 声优 / 题材）；bangumi = Bangumi 每日放送；auto = 先 yuc 失败回落 bangumi。",
+      "hint": "bangumi = Bangumi 每日放送，稳定且带评分；yuc = 長門番堂季度新番表，多了制作组 / 声优 / 题材，但部分机房连不上；auto = 先 bangumi，拿不到再回落 yuc。",
       "labels": [
-        "auto 先长门番堂，失败回落 Bangumi",
+        "auto 先 Bangumi，失败回落长门番堂",
         "yuc 长门番堂季度新番表",
         "bangumi Bangumi 每日放送"
       ]

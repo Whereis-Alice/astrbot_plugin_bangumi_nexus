@@ -740,10 +740,15 @@ def build_today_card(
     stats = [_stat(len(day.items), "TITLES", accent=True)]
     if long_running:
         stats.append(_stat(len(long_running), "LONG RUN"))
+    # 「TITLES」 统计的是今天的总数，主栏却只列前 「limit」 部。两个数字对不上时
+    # 必须在副标题里说清楚，否则用户会以为插件把番漏掉了 —— 这正是 1.1.3 的用户反馈。
+    sub = order_note
+    if len(day.items) > limit:
+        sub = f"{order_note}\u00b7今天共 {len(day.items)} 部，这里展示前 {limit} 部"
     hero = _hero(
         eyebrow="TODAY ON AIR",
         title=f"{day.label}\u00b7今日放送",
-        sub=order_note,
+        sub=sub,
         stats=tuple(stats),
     )
     footer = _footer("番剧中枢", "数据来源 bgm.tv", ("今日放送", version) if version else ())

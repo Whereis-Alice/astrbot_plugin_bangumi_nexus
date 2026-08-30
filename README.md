@@ -9,7 +9,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.25-6c8cff?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-AGPL--3.0--or--later-a6228c?style=flat-square)](LICENSE)
-[![Commands](https://img.shields.io/badge/%E6%8C%87%E4%BB%A4-42-3fb27f?style=flat-square)](#指令一览)
+[![Commands](https://img.shields.io/badge/%E6%8C%87%E4%BB%A4-41-3fb27f?style=flat-square)](#指令一览)
 [![Themes](https://img.shields.io/badge/%E5%8D%A1%E7%89%87%E4%B8%BB%E9%A2%98-6-f0913a?style=flat-square)](#卡片主题预览)
 
 </div>
@@ -46,7 +46,7 @@
   一集只推一条，而不是把所有组、所有语言、所有画质一起收下。再配一层可勾选的排除词表（简繁 / 画质 / 合集 / 生肉）兜底。
 - **每会话独立设置。** 卡片主题、渲染方式、结果版式、是否收播报、推送投递到哪个会话，都能按群 / 按私聊分别设定，
   互不干扰。
-- **42 条指令，22 个中文别名。** `/动漫`、`/放送时间`、`/追番列表`、`/抽番` 都能直接喊，不用背英文。
+- **41 条指令，23 个中文别名。** `/动漫`、`/放送时间`、`/追番列表`、`/抽番` 都能直接喊，不用背英文。
 
 <p align="center">
   <a href="#管理面板"><img src="assets/webui/watch.webp" alt="番剧中枢 管理面板 · 追番" width="760"></a><br>
@@ -156,7 +156,7 @@ AstrBot 会自动读取 `requirements.txt` 安装：
 
 ## 指令一览
 
-全部 42 条指令，6 个分类。下表里的 `/` 是默认唤醒前缀，实际请按你的 AstrBot 配置替换。
+全部 41 条指令，6 个分类。下表里的 `/` 是默认唤醒前缀，实际请按你的 AstrBot 配置替换。
 标注 **（仅管理员）** 的指令需要管理员权限。
 #### 🔍 查番 — 从八个源里把一部番的全部信息拼齐
 
@@ -176,8 +176,7 @@ AstrBot 会自动读取 `requirements.txt` 安装：
 | 指令 | 说明 | 别名 |
 | --- | --- | --- |
 | `/calendar` | 整周每日放送总览卡。 | `/每日放送` |
-| `/today` | 今天放送的番，按评分排序。 | `/今日放送` |
-| `/今日新番` | 今日放送的精简列表，适合群里刷屏少一点的场合。 | — |
+| `/today` | 今天放送的番：封面、放送钟点、评分，外加今天也在播的年番。 | `/今日放送`、`/今日新番` |
 | `/季度新番 [202607]` | 整季新番表：题材、制作组、首播时间，数据来自長門番堂。 | — |
 | `/新番 today|push|status` | 指令组：today 看今日、push 立即播报、status 查播报状态（后两者限管理员）。 | `/bangumi` |
 
@@ -359,7 +358,7 @@ AstrBot 会自动读取 `requirements.txt` 安装：
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `gacha_source` | string | `auto` | 抽番数据来源。yuc = 長門番堂季度新番表（含制作组 / 声优 / 题材）；bangumi = Bangumi 每日放送；auto = 先 yuc 失败回落 bangumi。<br>可选：`auto`、`yuc`、`bangumi` |
+| `gacha_source` | string | `auto` | 抽番数据来源。bangumi = Bangumi 每日放送，稳定且带评分；yuc = 長門番堂季度新番表，多了制作组 / 声优 / 题材，但部分机房连不上；auto = 先 bangumi，拿不到再回落 yuc。<br>可选：`auto`、`yuc`、`bangumi` |
 | `webui_enabled` | bool | 开 | 启用 Dashboard 管理页面。关闭后不注册任何 Web 路由，聊天指令不受影响。 |
 | `webui_theme` | string | `midnight` | WebUI 默认主题。首次打开页面时使用，之后以页面里选择的主题为准。<br>可选：`midnight`、`aurora`、`sakura`、`blueprint`、`paper`、`sunset` |
 
@@ -386,7 +385,7 @@ AstrBot 会自动读取 `requirements.txt` 安装：
 | **播报** | 配置推送目标、查看「自助订阅」进来的会话、按指定星期手动触发一次播报 |
 | **卡片** | 6 主题 × 4 种卡片的**真实渲染**预览，点开可放大到原始像素、可下载 PNG。改主题前先来这里看长相 |
 | **数据源** | 8 个数据源逐个体检，给出耗时与失败原因，一眼看出是哪个站挂了 |
-| **指令** | 全部 42 条指令速查表，按分类分组，显示别名与权限要求 |
+| **指令** | 全部 41 条指令速查表，按分类分组，显示别名与权限要求 |
 | **关于** | 版本、限额、安全提示、数据源致谢 |
 
 ### 面板长什么样
@@ -405,7 +404,7 @@ AstrBot 会自动读取 `requirements.txt` 安装：
 - **挑一个字幕组** —— 在「新增订阅」里只填番名、点「列字幕组」，下面会展开 Mikan 上的候选（带最后更新日、语言 / 画质标签、RSS 地址），点「订阅这个」直接落库。
 - **全局排除项** —— 12 个内置预设是一排开关，另有自定义词输入框（逗号 / 空格分隔都认）。下方实时预览展开后的完整关键词；「保存改动」只存偏好（影响以后新增的订阅），「回写到已有订阅」才会刷到当前会话已有的订阅上。
 
-指令视图会把 42 条指令按 6 个分类整张摊开，别名和权限都在表里：
+指令视图会把 41 条指令按 6 个分类整张摊开，别名和权限都在表里：
 
 <p align="center">
   <img src="assets/webui/commands.webp" alt="番剧中枢 管理面板 · 指令速查" width="820">
@@ -633,7 +632,7 @@ Bot：已订阅 名侦探光之美少女（雪飘工作室）
 | [Yometenma/astrbot_plugin_autobangumi_notify](https://github.com/Yometenma/astrbot_plugin_autobangumi_notify) | AutoBangumi Webhook 事件解析、目标会话拼装、指数退避与去重 |
 | [zhist2028/astrbot_plugin_anime1_list](https://github.com/zhist2028/astrbot_plugin_anime1_list) | anime1.me 列表抓取与观看地址解析、`get_anime_list` / `get_watch_url` 函数工具 |
 | [FlanChanXwO/astrbot_plugin_rsshub](https://github.com/FlanChanXwO/astrbot_plugin_rsshub) | RSS 订阅指令体系（`/sub` 全家桶）、RSSHub 路由简写 |
-| [xco2/astrbot_plugin_anime_gacha](https://github.com/xco2/astrbot_plugin_anime_gacha) | `/抽番` `/今日新番` `/查番`、萌娘百科查询、季度数据维护指令 |
+| [xco2/astrbot_plugin_anime_gacha](https://github.com/xco2/astrbot_plugin_anime_gacha) | `/抽番` `/查番`、萌娘百科查询、季度数据维护指令（`/今日新番` 现在是 `/today` 的别名） |
 
 ### 融合时顺手修掉的问题
 
@@ -722,7 +721,7 @@ Bot：已订阅 名侦探光之美少女（雪飘工作室）
 
 ```
 astrbot_plugin_bangumi_nexus/
-├── main.py                 指令层：42 条指令 + 4 个函数工具，只做「事件 ↔ 服务」翻译
+├── main.py                 指令层：41 条指令 + 4 个函数工具，只做「事件 ↔ 服务」翻译
 ├── nexus/
 │   ├── config.py           54 项配置的解析与校验
 │   ├── http.py             统一 HTTP 客户端：重试 / 缓存 / 并发闸门 / 统计

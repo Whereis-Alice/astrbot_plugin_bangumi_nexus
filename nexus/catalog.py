@@ -134,15 +134,9 @@ CALENDAR = Category(
         Command(
             "today",
             "today",
-            "今天放送的番，按评分排序。",
-            aliases=("今日放送",),
+            "今天放送的番：封面、放送钟点、评分，外加今天也在播的年番。",
+            aliases=("今日放送", "今日新番"),
             origin="astrbot_plugin_bangumi",
-        ),
-        Command(
-            "今日新番",
-            "今日新番",
-            "今日放送的精简列表，适合群里刷屏少一点的场合。",
-            origin="astrbot_plugin_anime_gacha",
         ),
         Command(
             "季度新番",

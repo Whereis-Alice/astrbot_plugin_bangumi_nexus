@@ -46,8 +46,12 @@ SEASON_TYPES = {"tv", "web"}
 #: 2 表示一共五季、十五个月分片，覆盖到位又不至于把索引撑得太大。
 LONG_RUN_SPAN = 2
 
-#: 「长期连载」 那一栏最多显示几部。这一栏是补充，不该抢当季新番的版面。
-LONG_RUN_LIMIT = 6
+#: 「长期连载」 那一栏最多显示几部。这一栏是补充，不该抢当季新番的版面，
+#: 但也不能卡得太死 —— 实测周日在播的年番就有 7 部，卡在 6 会无声吞掉一部。
+LONG_RUN_LIMIT = 8
+
+#: 今日放送主栏最多列几部。多出来的部分在卡片副标题上明说，而不是悄悄截断。
+TODAY_LIMIT = 12
 
 
 async def _ready(value: object) -> object:
@@ -332,8 +336,15 @@ class SearchService:
             ),
         )
 
-    async def today(self, umo: str, *, weekday: int, compact: bool = False) -> Reply:
-        """今日放送卡。「compact」 走精简列表，适合人多的群。"""
+    async def today(self, umo: str, *, weekday: int) -> Reply:
+        """今日放送卡：封面、放送钟点、评分，外加今天也在播的年番。
+
+        1.1.3 之前 「/今日新番」 走的是一条 「compact」 分支：同样大的卡片，
+        但不取封面、不查长期连载。结果是用户看到一张「全是首字占位块、
+        还缺了在播年番」的残卡，却完全不知道自己踩的是精简模式 ——
+        省下来的那点渲染时间远不值这个误解，所以整条分支删掉，只留一种口径。
+        真要少刷屏，把卡片渲染关掉退回纯文本就行，那是每个会话自己的偏好。
+        """
         deps = self._deps
         conf = deps.conf
         days = await deps.hub.bangumi.calendar()
@@ -344,15 +355,11 @@ class SearchService:
 
         items = sorted(day.items, key=lambda item: (-item.score, -item.doing))
         theme, _ = await style_for(deps, umo)
-        limit = 8 if compact else 12
-        extras = (
-            ()
-            if compact
-            else await _long_running(deps, weekday=weekday, days=days, limit=LONG_RUN_LIMIT)
-        )
+        limit = TODAY_LIMIT
+        extras = await _long_running(deps, weekday=weekday, days=days, limit=LONG_RUN_LIMIT)
         long_items = [subject for subject, _ in extras]
         shown = items[:limit] + long_items
-        covers = {} if compact else await cover_map(deps, ((item.id, item.image) for item in shown))
+        covers = await cover_map(deps, ((item.id, item.image) for item in shown))
         times = await _air_times(deps, shown)
         times.update({subject.id: label for subject, label in extras})
         trimmed = CalendarDay(weekday=day.weekday, label=day.label, items=tuple(items))

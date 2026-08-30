@@ -311,10 +311,10 @@
   "gacha_source": {
     "description": "抽番数据来源",
     "type": "string",
-    "hint": "yuc = 長門番堂季度新番表（含制作组 / 声优 / 题材）；bangumi = Bangumi 每日放送；auto = 先 yuc 失败回落 bangumi。",
+    "hint": "bangumi = Bangumi 每日放送，稳定且带评分；yuc = 長門番堂季度新番表，多了制作组 / 声优 / 题材，但部分机房连不上；auto = 先 bangumi，拿不到再回落 yuc。",
     "default": "auto",
     "options": ["auto", "yuc", "bangumi"],
-    "labels": ["auto 自动兜底", "yuc 長門番堂", "bangumi 每日放送"]
+    "labels": ["auto 先 Bangumi，失败回落長門番堂", "yuc 長門番堂", "bangumi 每日放送"]
   },
   "webui_enabled": {
     "description": "启用 Dashboard 管理页面",

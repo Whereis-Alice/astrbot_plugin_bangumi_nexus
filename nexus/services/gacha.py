@@ -2,7 +2,7 @@
 
 上游 「astrbot_plugin_anime_gacha」 只从一个季度表里随机取一条。这里做了三点改进：
 
-1. **池子可退化** —— 长门番堂拉不到时自动改用 Bangumi 每日放送，不会直接报错；
+1. **池子可退化** —— 默认走 Bangumi 每日放送，拉不到时自动改用长门番堂，不会直接报错；
 2. **题材过滤** —— 「/抽番 恋爱」 会在题材、类型、标题里找关键词，找不到时列出可选题材；
 3. **不重复** —— 每个会话记住最近抽过的几部，短时间内不会连着抽到同一部。
 
@@ -48,10 +48,11 @@ class GachaService:
             filtered_entries = [entry for entry in entries if _entry_matches(entry, genre)]
             filtered_subjects = [item for item in subjects if _subject_matches(item, genre)]
             if not filtered_entries and not filtered_subjects:
-                return Reply.plain(
-                    f"这一季没找到「{genre}」题材的番。可选题材："
-                    + "、".join(_genres(entries)[:24])
-                )
+                # 池子走 Bangumi 时 「entries」 是空的，题材要从条目标签里数，
+                # 否则提示会变成一句「可选题材：」后面什么都没有。
+                options = _genres(entries) or _tags(subjects)
+                hint = "、".join(options[:24]) if options else "换个更常见的词试试"
+                return Reply.plain(f"这一季没找到「{genre}」题材的番。可选题材：{hint}")
             entries, subjects = filtered_entries, filtered_subjects
 
         pool_size = len(entries) or len(subjects)
@@ -101,26 +102,45 @@ class GachaService:
     # 池子
     # ------------------------------------------------------------------
     async def _pool(self) -> tuple[list[SeasonEntry], list[Subject], str]:
-        """按配置取当季池子，「auto」 时长门番堂优先、Bangumi 兜底。"""
+        """按配置取当季池子，「auto」 时 Bangumi 优先、长门番堂兜底。
+
+        为什么是 Bangumi 优先：它的每日放送是官方 JSON 接口，稳定、带评分与在看
+        人数，抽到的番能直接拿去做跨源匹配。长门番堂胜在带制作组 / 声优 / 题材，
+        但它需要放宽 TLS 才连得上，不少机房会直接超时 —— 把它放在第一位等于
+        让每次 「/抽番」 都先赌一次网络。所以它退到兜底位，想独占仍可显式选 「yuc」。
+        """
 
         deps = self._deps
         preferred = deps.conf.gacha_source
         label = season_label(season_code())
-        if preferred in {"auto", "yuc"}:
-            try:
-                table = await deps.hub.yuc.season()
-            except Exception as error:  # noqa: BLE001
-                deps.activity.warn("gacha", f"长门番堂拉取失败：{error}")
-                table = None
-            if table is not None and table.total:
-                return list(table.entries), [], f"{label}·长门番堂"
-            if preferred == "yuc":
+        if preferred in {"auto", "bangumi"}:
+            subjects = await self._bangumi_pool()
+            if subjects:
+                return [], subjects, f"{label}·Bangumi 放送表"
+            if preferred == "bangumi":
                 return [], [], label
         try:
-            days = await deps.hub.bangumi.calendar()
-        except Exception as error:  # noqa: BLE001
-            deps.activity.warn("gacha", f"Bangumi 日历拉取失败：{error}")
+            table = await deps.hub.yuc.season()
+        except Exception as error:  # noqa: BLE001 - 上游任何异常都只该降级，不该让 /抽番 崩掉
+            deps.activity.warn("gacha", f"长门番堂拉取失败：{error}")
             return [], [], label
+        if table is not None and table.total:
+            return list(table.entries), [], f"{label}·长门番堂"
+        return [], [], label
+
+    async def _bangumi_pool(self) -> list[Subject]:
+        """把 Bangumi 整周放送表拉平成一份去重后的条目列表。
+
+        同一部番会出现在多天（重播 / 多平台），按条目 ID 去重，否则热门番
+        在池子里占的份额会凭空翻倍。
+        """
+
+        deps = self._deps
+        try:
+            days = await deps.hub.bangumi.calendar()
+        except Exception as error:  # noqa: BLE001 - 网络波动只该让池子为空，交给上层兜底
+            deps.activity.warn("gacha", f"Bangumi 日历拉取失败：{error}")
+            return []
         subjects: list[Subject] = []
         seen: set[int] = set()
         for day in days:
@@ -128,7 +148,7 @@ class GachaService:
                 if item.id not in seen:
                     seen.add(item.id)
                     subjects.append(item)
-        return [], subjects, f"{label}·Bangumi 放送表"
+        return subjects
 
     def _pick(self, umo: str, items: Sequence, *, key) -> object | None:
         """随机取一个，尽量避开这个会话最近抽过的。"""
@@ -180,6 +200,16 @@ def _subject_matches(subject: Subject, genre: str) -> bool:
     needle = genre.lower()
     haystack = [subject.name, subject.name_cn, *subject.tags]
     return any(needle in str(text).lower() for text in haystack if text)
+
+
+def _tags(subjects: Sequence[Subject]) -> tuple[str, ...]:
+    """Bangumi 池子的「题材」只能从条目标签里统计，取出现次数最多的那些。"""
+
+    counter: dict[str, int] = {}
+    for subject in subjects:
+        for tag in subject.tags:
+            counter[tag] = counter.get(tag, 0) + 1
+    return tuple(name for name, _ in sorted(counter.items(), key=lambda pair: -pair[1]))
 
 
 def _genres(entries: Sequence[SeasonEntry]) -> tuple[str, ...]:

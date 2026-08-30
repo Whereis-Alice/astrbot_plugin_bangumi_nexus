@@ -813,9 +813,9 @@ class BangumiNexusPlugin(Star):
         ):
             yield item
 
-    @filter.command("today", alias={"今日放送"}, priority=10)
+    @filter.command("today", alias={"今日放送", "今日新番"}, priority=10)
     async def cmd_today(self, event: AstrMessageEvent):
-        """今天播出的番，带封面与评分。"""
+        """今天播出的番：封面、放送钟点、评分，外加今天也在播的年番。"""
 
         weekday = self._today_index()
         async for item in self._serve(
@@ -823,19 +823,6 @@ class BangumiNexusPlugin(Star):
             "today",
             lambda umo, conf: self._search.today(umo, weekday=weekday),
             busy=BUSY_RENDER,
-        ):
-            yield item
-
-    @filter.command("今日新番", priority=10)
-    async def cmd_today_compact(self, event: AstrMessageEvent):
-        """今日放送的精简版，只列名字和时间。"""
-
-        weekday = self._today_index()
-        async for item in self._serve(
-            event,
-            "今日新番",
-            lambda umo, conf: self._search.today(umo, weekday=weekday, compact=True),
-            busy=BUSY_SEARCH,
         ):
             yield item
 

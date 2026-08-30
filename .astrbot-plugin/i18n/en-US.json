@@ -1,7 +1,7 @@
 {
   "metadata": {
     "display_name": "Bangumi Nexus",
-    "short_desc": "An all-in-one anime companion: 42 chat commands plus a dashboard page for search, watchlists, feeds, broadcasts and gacha.",
+    "short_desc": "An all-in-one anime companion: 41 chat commands plus a dashboard page for search, watchlists, feeds, broadcasts and gacha.",
     "desc": "Bangumi Nexus merges Bangumi, bangumi-data, anime1.me, Nagato Bandou, AGE, Moegirlpedia, Mikan and RSSHub into one cross-source anime index: subject search and the daily calendar, season tables, watchlists with progress tracking, RSS and Mikan subscriptions, a scheduled new-episode broadcast that the AstrBot persona can narrate, random gacha picks and AutoBangumi webhook intake - all rendered with six polished card themes and managed from a dashboard page."
   },
   "config": {
@@ -228,9 +228,9 @@
     },
     "gacha_source": {
       "description": "Gacha data source",
-      "hint": "yuc = Nagato Bandou season table with staff, cast and genres; bangumi = the Bangumi daily calendar; auto = try yuc first and fall back to Bangumi.",
+      "hint": "bangumi = the Bangumi daily calendar, stable and scored; yuc = the Nagato Bandou season table with staff, cast and genres, but unreachable from some hosts; auto = try Bangumi first and fall back to yuc.",
       "labels": [
-        "auto - yuc first, Bangumi as fallback",
+        "auto - Bangumi first, yuc as fallback",
         "yuc - Nagato Bandou season table",
         "bangumi - Bangumi daily calendar"
       ]

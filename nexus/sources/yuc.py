@@ -16,11 +16,12 @@ Licensed under the GNU Affero General Public License v3.0 or later.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..constants import WEEKDAY_CN, YUC_SEASON_URL
-from ..http import HttpClient
+from ..http import FetchError, HttpClient, browser_headers
 from ..models import SeasonEntry
 from ..titles import alias_keys, best_match, season_code
 
@@ -179,20 +180,46 @@ class YucSource:
     def __init__(self, http: HttpClient) -> None:
         self._http = http
         self._tables: dict[str, SeasonTable] = {}
+        # 上一次证书出问题的时间戳。上游换证期间会短暂过期（实机撞过），
+        # 记下来只为在提示里说清「这不是你的网络问题」。
+        self._ssl_failed_at = 0.0
 
     async def season(self, code: str = "", *, force: bool = False) -> SeasonTable:
         target = re.sub(r"\D", "", str(code or "")) or season_code()
         if not force and target in self._tables:
             return self._tables[target]
-        html = await self._http.fetch_text(
-            YUC_SEASON_URL.format(season=target),
-            cache_key=f"yuc:{target}",
-            ttl=0 if force else 6 * 3600,
-        )
+        html = await self._fetch(target, force=force)
         table = parse_season(html, target)
         if table.total:
             self._tables[target] = table
         return table
+
+    async def _fetch(self, target: str, *, force: bool) -> str:
+        """抓一季的 HTML；证书过期时按配置决定是否降级重试。
+
+        长门番堂 用 Let's Encrypt，上游续期出岔子时整站会短暂 「certificate has
+        expired」。那种时候整个季度表会被打空，比「跳过一次证书校验」更糟 ——
+        这里读的只是公开的番剧列表，没有凭据外泄风险，所以给一次降级重试的机会。
+        """
+        url = YUC_SEASON_URL.format(season=target)
+        ttl = 0 if force else 6 * 3600
+        headers = browser_headers("https://yuc.wiki/")
+        try:
+            return await self._http.fetch_text(
+                url, cache_key=f"yuc:{target}", ttl=ttl, headers=headers
+            )
+        except FetchError as error:
+            if not error.ssl_error:
+                raise
+            self._ssl_failed_at = time.time()
+            return await self._http.fetch_text(
+                url,
+                cache_key=f"yuc:insecure:{target}",
+                ttl=ttl,
+                headers=headers,
+                insecure=True,
+                retries=1,
+            )
 
     async def find(
         self, title: str, *, codes: tuple[str, ...] = ()
@@ -218,6 +245,7 @@ class YucSource:
         return {
             "seasons": len(self._tables),
             "entries": sum(table.total for table in self._tables.values()),
+            "ssl_degraded": bool(self._ssl_failed_at),
         }
 
 

@@ -194,7 +194,7 @@ class NexusConfig:
     anime1_enabled: bool = True
     anime1_refresh_hours: tuple[int, ...] = (1, 13, 22)
     # 投递
-    default_platform_id: str = "aiocqhttp"
+    default_platform_id: str = ""
     send_max_retries: int = 3
     send_retry_delay_seconds: float = 2.0
     send_concurrency: int = 3
@@ -289,7 +289,8 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
         ),
         anime1_enabled=_as_bool(_get(raw, "anime1_enabled", True), True),
         anime1_refresh_hours=parse_hours(_get(raw, "anime1_refresh_hours", "1,13,22")),
-        default_platform_id=_as_str(_get(raw, "default_platform_id", ""), "aiocqhttp"),
+        # 留空＝运行时自动挑一个启用中的平台实例，见 「nexus/platforms.py」
+        default_platform_id=_as_str(_get(raw, "default_platform_id", ""), ""),
         send_max_retries=_as_int(_get(raw, "send_max_retries", 3), 3, low=0, high=8),
         send_retry_delay_seconds=_as_float(
             _get(raw, "send_retry_delay_seconds", 2), 2.0, low=0.2, high=60.0

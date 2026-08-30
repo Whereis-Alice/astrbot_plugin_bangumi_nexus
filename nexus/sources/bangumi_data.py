@@ -111,21 +111,32 @@ class BangumiDataSource:
         self._bangumi_index: dict[str, DataItem] = {}
 
     async def month(self, year: int, month: int) -> tuple[DataItem, ...]:
+        """取某个月的分片。未来月份还没发布时返回空元组，不算错误。
+
+        bangumi-data 是「拍好了才上」，下一季的月份文件常常还不存在（404）。
+        这种空结果**不进内存缓存**：等上游发布之后下一次刷新就能拿到，
+        否则要等到插件重载。刷屏问题交给 HTTP 层的负缓存处理。
+        """
         cached = self._by_month.get((year, month))
         if cached is not None:
             return cached
         path = f"{year:04d}/{month:02d}.json"
         raw: Any = None
+        absent = False
         for base in (BANGUMI_DATA_CDN, BANGUMI_DATA_RAW):
             try:
                 raw = await self._http.fetch_json(
                     f"{base}/{path}", cache_key=f"bgmdata:{path}", ttl=6 * 3600
                 )
                 break
-            except FetchError:
+            except FetchError as error:
+                absent = absent or error.absent
                 continue
         items = tuple(parse_item(entry) for entry in raw or () if isinstance(entry, dict))
-        self._by_month[(year, month)] = items
+        if items or not absent:
+            # 只有「确实抓到了」或「失败原因不是 404」才记忆结果；
+            # 未来月份留白，好让它发布当天就能被捞到
+            self._by_month[(year, month)] = items
         self._index(items)
         return items
 

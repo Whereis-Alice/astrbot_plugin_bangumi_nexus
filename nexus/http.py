@@ -26,9 +26,30 @@ from typing import Any
 import httpx
 
 from .activity import ActivityLog
-from .constants import COVER_MAX_BYTES, DEFAULT_USER_AGENT
+from .constants import BROWSER_USER_AGENT, COVER_MAX_BYTES, DEFAULT_USER_AGENT
 
 RETRY_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524})
+# 「资源不存在」而不是「站点故障」：bangumi-data 的未来月份文件（下个季度还没发布）、
+# 長門番堂 不存在的季度页都会返回 404。重试没有意义，也不该按 error 级别刷活动日志。
+ABSENT_STATUS = frozenset({404, 410})
+# 「上游拒绝」：风控拦截（AGE 站在 Cloudflare 后面会 403 掉机房 IP）、地区限制。
+# 同样不该重试 —— 换几次都是同一个答案，只会把每次刷新拖慢好几秒。
+REFUSED_STATUS = frozenset({401, 403, 451})
+# 这两类一起构成「安静失败」：不重试、日志降级、结果进负缓存。
+QUIET_STATUS = ABSENT_STATUS | REFUSED_STATUS
+# 安静失败的负缓存时长：默认 6 小时。
+# 每日播报一轮会把同一个 404 打 N 遍，负缓存能把噪音直接压成一次。
+QUIET_CACHE_SECONDS = 6 * 3600
+# 证书过期 / 校验失败的特征串。上游换证期间会短暂出现，单独归类才能给出
+# 「这不是你的网络问题」这种有用提示，而不是混在超时里。
+SSL_MARKERS = (
+    "certificate verify failed",
+    "certificate has expired",
+    "ssl: certificate",
+    "sslcertverificationerror",
+    "self signed certificate",
+    "hostname mismatch",
+)
 IMAGE_MIME = {
     "jpg": "image/jpeg",
     "jpeg": "image/jpeg",
@@ -43,16 +64,86 @@ IMAGE_MIME = {
 class FetchError(RuntimeError):
     """网络访问最终失败。带上人话描述，方便直接回给用户。"""
 
-    def __init__(self, message: str, *, status: int = 0, url: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int = 0,
+        url: str = "",
+        absent: bool = False,
+        refused: bool = False,
+        ssl_error: bool = False,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.url = url
+        # 「absent」＝上游明确说没有这个资源（404 等），属预期结果不是故障
+        self.absent = absent
+        # 「refused」＝上游拒绝服务（风控 / 地区限制），换成提示用户配代理更有用
+        self.refused = refused
+        # 「ssl_error」＝证书问题，调用方可以据此提示用户而不是笼统说「网络失败」
+        self.ssl_error = ssl_error
+
+    @property
+    def quiet(self) -> bool:
+        """是否属于「安静失败」：不值得重试、不值得报 error。"""
+        return self.absent or self.refused
+
+
+def is_ssl_error(error: BaseException) -> bool:
+    """判断一个异常是否属于证书问题。
+
+    httpx 把 SSL 错误包在 「ConnectError」 里，类型上和普通连接失败没区别，
+    只能看消息文本。写死在一处，避免各数据源各自 「in str(error)」。
+    """
+    text = f"{type(error).__name__} {error}".lower()
+    return any(marker in text for marker in SSL_MARKERS)
+
+
+def browser_headers(referer: str = "") -> dict[str, str]:
+    """伪装成浏览器的一组请求头，供抓 HTML 的数据源使用。
+
+    只带最基本的几项：UA、Accept、语言、以及可选的 Referer。
+    Sec-Fetch-* 之类在 HTTP/2 下反而容易和 httpx 自己的头冲突，不加。
+    """
+    headers = {
+        "User-Agent": BROWSER_USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    if referer:
+        headers["Referer"] = referer
+    return headers
 
 
 @dataclass
 class _CacheEntry:
     value: Any
     expires_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class _QuietMiss:
+    """被负缓存记下来的一次「安静失败」。
+
+    存异常对象本身会连着 traceback 一起留在内存里，所以只存重建所需的几个字段。
+    """
+
+    message: str
+    status: int
+    url: str
+    absent: bool
+    refused: bool
+
+    def rebuild(self) -> FetchError:
+        return FetchError(
+            self.message,
+            status=self.status,
+            url=self.url,
+            absent=self.absent,
+            refused=self.refused,
+        )
 
 
 class TTLCache:
@@ -133,6 +224,8 @@ class HttpClient:
         self._activity = activity
         self._semaphore = asyncio.Semaphore(max(1, concurrency))
         self._client: httpx.AsyncClient | None = None
+        # 不校验证书的备用池，只在调用方显式要求时才建（见 「client」 的注释）
+        self._insecure_client: httpx.AsyncClient | None = None
         self._lock = asyncio.Lock()
         self.requests = 0
         self.failures = 0
@@ -164,12 +257,19 @@ class HttpClient:
         self._semaphore = asyncio.Semaphore(max(1, concurrency))
         return needs_rebuild
 
-    async def client(self) -> httpx.AsyncClient:
-        if self._client is not None and not self._client.is_closed:
-            return self._client
+    async def client(self, *, insecure: bool = False) -> httpx.AsyncClient:
+        """取连接池。「insecure」 会拿到一个独立的、不校验证书的池。
+
+        两个池分开而不是共用一个 「verify=False」：绝大多数请求都该校验证书，
+        只有明确被用户加进白名单的站点才降级，否则就是给自己开后门。
+        """
+        existing = self._insecure_client if insecure else self._client
+        if existing is not None and not existing.is_closed:
+            return existing
         async with self._lock:
-            if self._client is not None and not self._client.is_closed:
-                return self._client
+            existing = self._insecure_client if insecure else self._client
+            if existing is not None and not existing.is_closed:
+                return existing
             kwargs: dict[str, Any] = {
                 "timeout": httpx.Timeout(self.timeout, connect=min(10.0, self.timeout)),
                 "follow_redirects": True,
@@ -181,16 +281,25 @@ class HttpClient:
             }
             if self.proxy:
                 kwargs["proxy"] = self.proxy
-            self._client = httpx.AsyncClient(**kwargs)
-            return self._client
+            if insecure:
+                kwargs["verify"] = False
+                created = httpx.AsyncClient(**kwargs)
+                self._insecure_client = created
+            else:
+                created = httpx.AsyncClient(**kwargs)
+                self._client = created
+            return created
 
     async def close(self) -> None:
-        client, self._client = self._client, None
-        if client is not None and not client.is_closed:
-            try:
-                await client.aclose()
-            except Exception:  # noqa: BLE001 # pragma: no cover - 关闭失败无所谓
-                pass
+        clients = [self._client, self._insecure_client]
+        self._client = None
+        self._insecure_client = None
+        for client in clients:
+            if client is not None and not client.is_closed:
+                try:
+                    await client.aclose()
+                except Exception:  # noqa: BLE001 # pragma: no cover - 关闭失败无所谓
+                    pass
 
     # -- 核心请求 -----------------------------------------------------------
 
@@ -206,13 +315,19 @@ class HttpClient:
         retries: int | None = None,
         expect_status: bool = True,
         allow_redirects: bool = True,
+        insecure: bool = False,
     ) -> httpx.Response:
+        """发一个请求，按错误性质决定重试还是当场放弃。
+
+        「insecure」 只在调用方明确知道对方证书有问题时才置真（如上游换证期间
+        证书过期），走一个独立的不校验客户端，不影响其它请求的安全性。
+        """
         attempts = (self.max_retries if retries is None else max(0, retries)) + 1
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
                 async with self._semaphore:
-                    client = await self.client()
+                    client = await self.client(insecure=insecure)
                     self.requests += 1
                     response = await client.request(
                         method.upper(),
@@ -223,26 +338,25 @@ class HttpClient:
                         content=data,
                         follow_redirects=allow_redirects,
                     )
-                if expect_status and response.status_code in RETRY_STATUS:
-                    raise FetchError(
-                        f"上游返回 {response.status_code}",
-                        status=response.status_code,
-                        url=url,
-                    )
                 if expect_status and response.status_code >= 400:
-                    self.failures += 1
-                    raise FetchError(
-                        f"上游返回 {response.status_code}",
-                        status=response.status_code,
-                        url=url,
-                    )
+                    raise _status_error(response.status_code, url)
                 return response
             except FetchError as error:
                 last_error = error
+                # 安静失败（404 / 403）当场返回：重试改变不了答案，只会拖慢调用方
+                if error.quiet:
+                    self._log("http", f"{url} {error}", "debug")
+                    raise
                 if error.status and error.status not in RETRY_STATUS:
+                    self.failures += 1
                     break
             except (httpx.TimeoutException, httpx.TransportError) as error:
                 last_error = error
+                if is_ssl_error(error):
+                    # 证书问题重试同样没用，但要单独归类好让上层给出准确提示
+                    self.failures += 1
+                    self._log("http", f"{url} 证书校验失败：{error}", "warn")
+                    raise FetchError(f"上游证书异常（{error}）", url=url, ssl_error=True) from error
             except Exception as error:  # noqa: BLE001 # pragma: no cover - 兜底
                 last_error = error
                 break
@@ -273,8 +387,10 @@ class HttpClient:
         key = self._cache_key("json", cache_key or url, kwargs)
         cached = self.cache.get(key)
         if cached is not None:
+            if isinstance(cached, _QuietMiss):
+                raise cached.rebuild()
             return cached
-        response = await self.request(kwargs.pop("method", "GET"), url, **kwargs)
+        response = await self._quiet_cached(key, kwargs.pop("method", "GET"), url, kwargs)
         try:
             value = response.json()
         except ValueError as error:
@@ -293,11 +409,33 @@ class HttpClient:
         key = self._cache_key("text", cache_key or url, kwargs)
         cached = self.cache.get(key)
         if cached is not None:
+            if isinstance(cached, _QuietMiss):
+                raise cached.rebuild()
             return cached
-        response = await self.request(kwargs.pop("method", "GET"), url, **kwargs)
+        response = await self._quiet_cached(key, kwargs.pop("method", "GET"), url, kwargs)
         text = response.text
         self.cache.set(key, text, self.cache_ttl if ttl is None else ttl)
         return text
+
+    async def _quiet_cached(
+        self, key: str, method: str, url: str, kwargs: dict[str, Any]
+    ) -> httpx.Response:
+        """发请求，并把「安静失败」也写进缓存。
+
+        没有负缓存的话，一轮播报里同一个未发布月份的 404 会被打十几遍：
+        既拖慢响应，又把活动日志刷满。既然上游明确说了「没有」，
+        那这个答案在几小时内不会变。
+        """
+        try:
+            return await self.request(method, url, **kwargs)
+        except FetchError as error:
+            if error.quiet:
+                self.cache.set(
+                    key,
+                    _QuietMiss(str(error), error.status, url, error.absent, error.refused),
+                    QUIET_CACHE_SECONDS,
+                )
+            raise
 
     async def fetch_bytes(self, url: str, *, limit: int = COVER_MAX_BYTES, **kwargs: Any) -> bytes:
         response = await self.request("GET", url, **kwargs)
@@ -370,6 +508,24 @@ class HttpClient:
     def _log(self, scope: str, message: str, level: str = "info") -> None:
         if self._activity is not None:
             self._activity.add(scope, message, level=level)
+
+
+def _status_error(status: int, url: str) -> FetchError:
+    """把 HTTP 状态码翻成一条带语义标记的 「FetchError」。
+
+    文案面向普通用户：403 直接点出「可能被风控」并给出可操作建议，
+    比一句「上游返回 403」有用得多。
+    """
+    if status in ABSENT_STATUS:
+        return FetchError(f"上游没有这个资源（{status}）", status=status, url=url, absent=True)
+    if status in REFUSED_STATUS:
+        return FetchError(
+            f"上游拒绝访问（{status}），可能被风控或地区限制拦截，可在插件配置里填 「proxy」",
+            status=status,
+            url=url,
+            refused=True,
+        )
+    return FetchError(f"上游返回 {status}", status=status, url=url)
 
 
 def _guess_mime(url: str, payload: bytes) -> str:

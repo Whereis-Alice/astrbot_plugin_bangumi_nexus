@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from ..constants import ANIME1_LIST_URL, ANIME1_WATCH_URL
-from ..http import FetchError, HttpClient
+from ..http import FetchError, HttpClient, browser_headers
 from ..models import Anime1Entry
 from ..titles import alias_keys, best_match
 
@@ -76,8 +76,12 @@ class Anime1Source:
     async def refresh(self, *, force: bool = False) -> tuple[Anime1Entry, ...]:
         if self._entries and not force:
             return self._entries
+        # anime1 的列表接口挂在 WordPress 前面，带浏览器头才不会被 WAF 挡
         raw = await self._http.fetch_json(
-            ANIME1_LIST_URL, cache_key="anime1:list", ttl=0 if force else 3600
+            ANIME1_LIST_URL,
+            cache_key="anime1:list",
+            ttl=0 if force else 3600,
+            headers=browser_headers("https://anime1.me/"),
         )
         entries = parse_rows(raw)
         if entries:

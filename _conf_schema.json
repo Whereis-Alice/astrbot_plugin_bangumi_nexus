@@ -274,10 +274,10 @@
     "default": "1,13,22"
   },
   "default_platform_id": {
-    "description": "默认平台适配器 ID",
+    "description": "默认平台实例 ID",
     "type": "string",
-    "hint": "Webhook 目标只给了 QQ 号 / 群号时，用它拼出完整会话标识。",
-    "default": "aiocqhttp"
+    "hint": "留空＝自动识别（推荐）。只给群号 / QQ 号时用它拼出完整会话标识。注意要填「实例 ID」（AstrBot 平台页每个适配器的唯一名字，如 default），不是适配器类型 aiocqhttp；填错会自动纠正并在活动日志里提示。",
+    "default": ""
   },
   "send_max_retries": {
     "description": "推送失败重试次数",

@@ -339,7 +339,7 @@ AstrBot 会自动读取 `requirements.txt` 安装：
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `default_platform_id` | string | `aiocqhttp` | 默认平台适配器 ID。Webhook 目标只给了 QQ 号 / 群号时，用它拼出完整会话标识。 |
+| `default_platform_id` | string | 空 | 默认平台**实例** ID（AstrBot 平台页里每个适配器的唯一名字，通常是 `default`）。留空＝自动识别当前启用的实例，推荐保持留空。填成适配器类型（如 `aiocqhttp`）也没关系，插件会自动纠正并在活动日志里提示。 |
 | `send_max_retries` | int | `3` | 推送失败重试次数 |
 | `send_retry_delay_seconds` | float | `2` | 推送重试基础延迟（秒）。指数退避：第 N 次等待 延迟 × 2^(N-1)。 |
 | `send_concurrency` | int | `3` | 推送并发上限。同时最多给几个会话发消息，太高容易触发平台风控。 |

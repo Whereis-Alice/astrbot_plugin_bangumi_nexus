@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import quote
 
 from ..constants import MOEGIRL_API, MOEGIRL_PAGE
-from ..http import FetchError, HttpClient
+from ..http import FetchError, HttpClient, browser_headers
 from ..models import MoegirlHit
 
 #: 正文里要整块删掉的元素选择器。
@@ -124,6 +124,7 @@ class MoegirlSource:
                 MOEGIRL_PAGE.format(title=quote(title.strip(), safe="")),
                 cache_key=f"moe:page:{title}",
                 ttl=12 * 3600,
+                headers=browser_headers("https://zh.moegirl.org.cn/"),
             )
         except FetchError:
             return ""

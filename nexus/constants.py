@@ -41,6 +41,14 @@ PLUGIN_VERSION = declared_version()
 
 DEFAULT_USER_AGENT = f"{PLUGIN_NAME}/{PLUGIN_VERSION} (+{REPO_URL})"
 
+# 抓 HTML 的站点（AGE / 長門番堂 / anime1 / 萌娘百科）普遍对「机器人 UA」不友好，
+# 有的直接 403。所以爬页面时换成主流浏览器 UA；调 API 的站点（Bangumi 明确
+# 要求 UA 里带项目地址）仍然用 「DEFAULT_USER_AGENT」，两者不能混。
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
 # --- 外部端点 --------------------------------------------------------------
 
 BANGUMI_API = "https://api.bgm.tv"
@@ -52,6 +60,17 @@ ANIME1_WATCH_URL = "https://anime1.me/?cat={cat}"
 YUC_SEASON_URL = "https://yuc.wiki/{season}"
 AGE_RECOMMEND_URL = "https://www.agedm.io/recommend/{page}"
 AGE_SITE = "https://www.agedm.io"
+# AGE 每 2~3 个月换域名（官方 README 自己写的），所以镜像按「新 → 旧 → 易记」排，
+# 逐个试到通为止；顺序即优先级，官方最新域名永远放第一个。
+AGE_MIRRORS: tuple[str, ...] = (
+    "https://www.agedm.io",
+    "https://www.agedm.org",
+    "https://www.age.tv",
+    "https://www.agedm.com",
+    "https://agefans.com",
+)
+# 官方维护的域名公告页，用来在全部内置镜像都挂掉时自动发现新域名
+AGE_DOMAIN_NOTICE = "https://raw.githubusercontent.com/agefanscom/website/main/README.md"
 MOEGIRL_API = "https://zh.moegirl.org.cn/api.php"
 MOEGIRL_PAGE = "https://zh.moegirl.org.cn/{title}"
 

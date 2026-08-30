@@ -17,6 +17,7 @@ from astrbot.api.message_components import Image, Plain
 from astrbot.core.message.message_event_result import MessageChain
 
 from ..models import FeedItem, Notification
+from ..platforms import Instances, describe, live_platforms, pick_platform_id, remap_umo
 from ..render import build_feed_card, build_notice_card
 from .base import Deps, Reply, cover_uri, llm_text, make_card, style_for
 
@@ -41,6 +42,8 @@ class Notifier:
     def __init__(self, deps: Deps) -> None:
         self._deps = deps
         self._recent: dict[str, float] = {}
+        # 平台段重映射每种写法只提示一次，否则每轮推送都会刷同一行日志
+        self._remap_notified: set[str] = set()
         self._sent = 0
         self._failed = 0
         self._skipped = 0
@@ -127,9 +130,14 @@ class Notifier:
         return await self.deliver(MessageChain(chain=components), umo)
 
     async def deliver(self, chain: MessageChain, umo: str) -> bool:
-        """真正落地的一次投递，失败按指数退避重试。"""
+        """真正落地的一次投递，失败按指数退避重试。
+
+        投递前先把会话标识的平台段对一遍运行时的实例表：库里可能存着早期版本
+        拼错的适配器类型名，不纠正的话 「send_message」 会静默返回 False。
+        """
         deps = self._deps
         conf = deps.conf
+        umo = self.normalize_umo(umo)
         attempts = max(1, conf.send_max_retries)
         delay = max(0.5, conf.send_retry_delay_seconds)
         for attempt in range(1, attempts + 1):
@@ -318,15 +326,16 @@ class Notifier:
 
         允许三种写法，因为让用户去背 「aiocqhttp:GroupMessage:12345」 太苛刻：
         「群号」、「group:群号」/「friend:QQ号」、以及完整的三段式 umo。
+        平台段一律取运行时解析出来的实例 id，完整 umo 也会过一遍纠正。
         """
-        platform = self._deps.conf.default_platform_id or "aiocqhttp"
+        platform = self.platform_id()
         resolved: list[str] = []
         for entry in raw:
             token = str(entry).strip()
             if not token:
                 continue
             if token.count(":") >= 2:
-                resolved.append(token)
+                resolved.append(self.normalize_umo(token))
                 continue
             if ":" in token:
                 kind, _, ident = token.partition(":")
@@ -343,6 +352,47 @@ class Notifier:
                 continue
             resolved.append(f"{platform}:GroupMessage:{token}")
         return tuple(dict.fromkeys(resolved))
+
+    def instances(self) -> Instances:
+        """当前启用的平台实例表，取不到就是空元组。"""
+        return live_platforms(self._deps.context)
+
+    def platform_id(self) -> str:
+        """配置里的 「default_platform_id」 → 真实可用的平台实例 id。
+
+        用户几乎总会填适配器类型名（面板上显示的就是它），而 「send_message」
+        按实例 id 匹配，所以这里必须换算一次；留空即表示「自动挑一个」。
+        """
+        preferred = self._deps.conf.default_platform_id.strip()
+        instances = self.instances()
+        resolved = pick_platform_id(instances, preferred)
+        if not resolved:
+            # 适配器还没起来（启动早期）时保持旧行为，别拼出空平台段
+            return preferred or "aiocqhttp"
+        if preferred and resolved != preferred:
+            self._warn_remap(preferred, resolved, instances)
+        return resolved
+
+    def normalize_umo(self, umo: str) -> str:
+        """会话标识的平台段对齐运行时实例表；对得上就原样返回。"""
+        instances = self.instances()
+        fixed = remap_umo(umo, instances, self._deps.conf.default_platform_id.strip())
+        if fixed != umo:
+            self._warn_remap(umo.partition(":")[0], fixed.partition(":")[0], instances)
+        return fixed
+
+    def _warn_remap(self, source: str, target: str, instances: Instances) -> None:
+        """同一种误填只提示一次，方便用户去改配置又不刷屏。"""
+        key = f"{source}->{target}"
+        if key in self._remap_notified:
+            return
+        self._remap_notified.add(key)
+        self._deps.activity.warn(
+            "notify",
+            f"平台标识 「{source}」 不是启用中的适配器实例，已改用 「{target}」"
+            f"（当前实例：{describe(instances)}）",
+        )
+        logger.info(f"番剧中枢平台标识重映射 {source} -> {target}")
 
     def stats(self) -> dict[str, int]:
         return {

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import html
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 from ..catalog import CATEGORIES, Category
 from ..models import (
@@ -667,23 +667,47 @@ def build_today_card(
     width: int = CARD_WIDTH,
     limit: int = 12,
     covers: dict[int, str] | None = None,
+    times: Mapping[int, str] | None = None,
+    long_running: Sequence[Subject] = (),
+    order_note: str = "按评分从高到低排列",
     version: str = "",
 ) -> str:
-    """今日放送卡。带封面的两列瓦片，比整周卡更适合单日细看。"""
+    """今日放送卡。带封面的两列瓦片，比整周卡更适合单日细看。
+
+    「times」 是 「{条目 ID: 日本时间钟点}」。Bangumi 的每日放送接口只给「星期几」，
+    钟点得从 bangumi-data 补，那是一次带缓存的异步取数 —— 模板必须是纯函数，
+    所以由调用方查好了传进来，而不是在这里现查。
+
+    「long_running」 是年番、半年番那类「今天也在播、但已经从当季日历里消失」的条目。
+    它们单独占一栏而不是混进主列表：混进去会让「今天共 N 部」这个数字失真，
+    而且它们的序号会插进当季番的排名里，看着像评分比人家高。
+    """
 
     resolved = theme if isinstance(theme, Theme) else resolve_theme(theme)
     covers = covers or {}
-    tiles = []
-    for index, subject in enumerate(day.items[:limit], start=1):
-        cover = covers.get(subject.id, "") if index <= MAX_COVERS else ""
-        meta = [f"<span><i>评分</i> <b>{esc(subject.score_label)}</b></span>"]
+    clock = times or {}
+    # 封面预算两栏共用：封面是 base64 data URI，数量失控会把渲染请求撑爆。
+    # 按「真的嵌进去了才扣」计数，比按下标截断更省 —— 缺图的条目不该占额度。
+    budget = MAX_COVERS
+
+    def tile(subject: Subject, rank: str = "") -> str:
+        nonlocal budget
+        cover = covers.get(subject.id, "") if budget > 0 else ""
+        if cover:
+            budget -= 1
+        meta = []
+        air = clock.get(subject.id, "")
+        if air:
+            # 放送钟点排在评分前面：这张卡是「今天几点看什么」，时间才是主信息。
+            meta.append(f"<span><i>放送</i> <b>{esc(air)}</b></span>")
+        meta.append(f"<span><i>评分</i> <b>{esc(subject.score_label)}</b></span>")
         if subject.doing:
             meta.append(f"<span><i>在看</i> {subject.doing}</span>")
         if subject.eps:
             meta.append(f"<span><i>话数</i> {subject.eps}</span>")
-        tiles.append(
+        return (
             '<div class="tile">'
-            + _thumb(cover, subject.display_name, rank=str(index))
+            + _thumb(cover, subject.display_name, rank=rank)
             + '<div class="tile-main">'
             + f'<div class="tile-title">{esc(clip(subject.display_name, 36))}</div>'
             + (
@@ -695,16 +719,32 @@ def build_today_card(
             + _chips(subject.tags[:3], variant="ghost")
             + "</div></div>"
         )
-    body = (
-        f'<div class="body"><div class="grid c2">{"".join(tiles)}</div></div>'
-        if tiles
-        else f'<div class="body">{_empty("今天没有查到放送记录")}</div>'
-    )
+
+    tiles = [tile(subject, str(index)) for index, subject in enumerate(day.items[:limit], start=1)]
+    # 长期连载不编号：它们和上面那栏不是同一个排名体系。
+    extra_tiles = [tile(subject) for subject in long_running]
+    sections = []
+    if tiles:
+        sections.append(f'<div class="grid c2">{"".join(tiles)}</div>')
+    elif not extra_tiles:
+        sections.append(_empty("今天没有查到放送记录"))
+    if extra_tiles:
+        sections.append(
+            _block(
+                "长期连载",
+                f'<div class="grid c2">{"".join(extra_tiles)}</div>',
+                hint="年番 / 半年番，今天也在播",
+            )
+        )
+    body = f'<div class="body">{"".join(sections)}</div>'
+    stats = [_stat(len(day.items), "TITLES", accent=True)]
+    if long_running:
+        stats.append(_stat(len(long_running), "LONG RUN"))
     hero = _hero(
         eyebrow="TODAY ON AIR",
         title=f"{day.label}\u00b7今日放送",
-        sub="按评分从高到低排列",
-        stats=(_stat(len(day.items), "TITLES", accent=True),),
+        sub=order_note,
+        stats=tuple(stats),
     )
     footer = _footer("番剧中枢", "数据来源 bgm.tv", ("今日放送", version) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="TODAY"))

@@ -417,6 +417,7 @@ class SearchService:
             covers=covers,
             times=times,
             long_running=long_items,
+            order_note=_sort_note(conf.push_sort_by, conf.push_sort_order),
         )
         plain = _today_plain(trimmed, limit, extras=extras, times=times)
         return Reply(
@@ -569,6 +570,16 @@ class SearchService:
 # ---------------------------------------------------------------------------
 # 纯文本兜底
 # ---------------------------------------------------------------------------
+def _sort_note(key: str, order: str) -> str:
+    """把播报的排序配置翻成人话，写在卡片副标题上。
+
+    播报的排序是群管自己配的，卡片却一直硬写着「按评分从高到低排列」——
+    配成按在看人数或名称排之后，副标题就在骗人。
+    """
+    names = {"score": "评分", "doing": "在看人数", "time": "放送时间", "name": "名称"}
+    return f"按{names.get(key, names['score'])}{'从低到高' if order == 'asc' else '从高到低'}排列"
+
+
 def _sort_subjects(items: Sequence[Subject], key: str, order: str) -> list[Subject]:
     """按配置里的字段给条目排序。「time」 用放送星期，「name」 用显示名。"""
     keys = {

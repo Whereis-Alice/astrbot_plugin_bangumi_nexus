@@ -30,8 +30,8 @@ from ..constants import (
     PICK_MAX_OPTIONS,
     PICK_SESSION_SECONDS,
 )
-from ..dedup import dedupe_releases
-from ..models import MatchResult, MikanGroup, Notification, Subscription
+from ..dedup import dedupe_releases, episode_number, revision, series_key
+from ..models import FeedItem, MatchResult, MikanGroup, Notification, Subscription
 from ..render import build_feed_card, build_notice_card, build_picker_card, theme_keys
 from ..sources.rss import dmhy_feed, mikan_group_feed, normalize_feed_url, rsshub_feed
 from .base import (
@@ -849,10 +849,14 @@ class SubscriptionService:
         # 若先归并再查历史，昨天已推过的那一版会把今天新出的 v2 顶掉，结果什么也不推。
         # 落选的版本不需要额外记账 —— 上面 「mark_seen」 已经把整批 matched 都记成已读。
         merged = 0
+        carried = 0
         if conf.rss_episode_dedup:
             outcome = dedupe_releases(fresh, prefer=conf.rss_episode_prefer)
             merged = outcome.merged
             fresh = list(outcome.kept)
+            fresh, carried = await self._merge_across_polls(sub, fresh)
+        if not fresh:
+            return None
 
         limited = fresh[: max(1, conf.rss_max_items_per_poll)]
         hidden = len(fresh) - len(limited)
@@ -861,6 +865,8 @@ class SubscriptionService:
             lines.append(f"另有 {hidden} 条本轮没展示，避免刷屏")
         if merged:
             lines.append(f"同一集的另外 {merged} 个版本（简繁 / 画质 / 片源）已自动合并")
+        if carried:
+            lines.append(f"另有 {carried} 条是之前推过的那一集的其它版本，已跳过")
         cover = ""
         if sub.subject_id:
             subject = await deps.hub.bangumi.subject(sub.subject_id)
@@ -878,10 +884,58 @@ class SubscriptionService:
                 "subscription": sub.name,
                 "hidden": hidden,
                 "merged": merged,
+                "carried": carried,
             },
         )
         deps.activity.info("rss", f"{sub.name} 有 {len(fresh)} 条新更新")
         return await self.target_for(sub.umo), notification
+
+    async def _merge_across_polls(
+        self, sub: Subscription, fresh: list[FeedItem]
+    ) -> tuple[list[FeedItem], int]:
+        """跨轮次的同集归并：这一集之前推过了，就不再为它的其它版本发第二条通知。
+
+        为什么必须跨轮次：同一个字幕组对同一集从四个片源各压一版，发布日期是**跨天**的
+        （实测 CR 8/31、Baha 与 B-Global 9/1、ABEMA 还能再晚五天）。单次轮询内的归并
+        只能收拢「同一批到达」的版本，先到的那一版当轮就推走，第二天后到的又是全新
+        条目，一集照样刷两三条 —— 归并对这类组基本失效。
+
+        语义是**先到先得**：跨轮次没法预知后面还会不会出更合口味的版本，所以谁先到推谁。
+        真要锁定某个片源（比如「只要 Baha」），用排除项把其它片源挡在门外才是对的做法。
+        例外是修订版：「01v2」 的修订号更高，照推 —— 那是字幕组在修错，压过初版才合理。
+
+        返回 「(要推的条目, 被跳过的条数)」。窗口设为 0 等于关掉这一层。
+        """
+
+        conf = self._deps.conf
+        window = conf.rss_episode_dedup_window_hours
+        if window <= 0 or not fresh:
+            return fresh, 0
+        known = await self._deps.store.recent_episodes(sub.umo, sub.id, window_hours=float(window))
+        keep: list[FeedItem] = []
+        rows: list[tuple[str, str, int, str]] = []
+        skipped = 0
+        for item in fresh:
+            episode = episode_number(item.title)
+            if not episode:
+                # 认不出集数的（剧场版、合集、字幕组公告）不参与归并，原样放行。
+                keep.append(item)
+                continue
+            key = (series_key(item.title), episode)
+            rev = revision(item.title)
+            if known.get(key, 0) >= rev:
+                skipped += 1
+                continue
+            # 同一批里也要更新 「known」：批内归并理论上已收拢，但作品键的推断
+            # 靠字符串启发，万一同批漏了一条也不该重复记账。
+            known[key] = rev
+            keep.append(item)
+            rows.append((key[0], episode, rev, item.title))
+        if rows:
+            await self._deps.store.remember_episodes(sub.umo, sub.id, rows)
+        if skipped:
+            self._deps.activity.info("rss", f"{sub.name} 跳过 {skipped} 条已推过那一集的其它版本")
+        return keep, skipped
 
     async def _on_failure(self, sub: Subscription, detail: str) -> tuple[str, Notification] | None:
         """记录失败。只在「从正常变为失败」的那一次发告警，避免每轮刷屏。"""

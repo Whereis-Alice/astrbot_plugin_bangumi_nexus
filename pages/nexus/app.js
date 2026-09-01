@@ -681,6 +681,7 @@ async function loadExcludes() {
     shared: Array.isArray(payload?.global) ? payload.global.map(String) : [],
     dedup: payload?.episode_dedup !== false,
     prefer: Array.isArray(payload?.episode_prefer) ? payload.episode_prefer.map(String) : [],
+    window: Number(payload?.episode_window_hours) || 0,
     saved: "",
   };
   excludeDraft.saved = JSON.stringify(excludeValues());
@@ -1460,9 +1461,11 @@ function excludePanel() {
     title: "排除项",
     desc:
       "过滤分三层：配置页的全局排除项（所有会话都吃）→ 这里的本会话排除项 → 每条订阅自己的关键词。" +
-      "建议只在这里排掉「任何形式都不想要」的东西（合集 / 生肉 / 720p）；语言和片源属于口味，" +
-      "交给「同集归并」按优先顺序挑更划算 —— 硬屏蔽 ABEMA / CR 的代价是 Baha 那天没出片就整集收不到。" +
-      "勾「繁体」不会误杀「简繁日内封」这类双语单文件，要连双语一起躲请勾「简繁」。",
+      "订的是「某个组的某部番」而这个组稳定同发 Baha / ABEMA / CR / B-Global 四版时，" +
+      "把不想要的三个片源排掉是最可控的做法 —— 同集归并是先到先得，不保证留下你要的那一版。" +
+      "订的是关键词搜索、dmhy 全站这种混多个组的宽源时反过来：片源别排，交给同集归并，" +
+      "否则某个组那天没出片就整集收不到。" +
+      "勾「繁体」不会误杀「简繁日内封」「[CHS][CHT]」这类双语单文件，要连双语一起躲请勾「简繁」。",
     actions:
       btn(dirty ? "保存改动" : "保存", {
         act: "exclude-save",
@@ -1512,6 +1515,12 @@ function excludePanel() {
           ? "同集归并：开" + (prefer.length ? "（优先 " + prefer.join(" > ") + "）" : "")
           : "同集归并：关",
         excludeDraft.dedup ? "ok" : "warn",
+      ) +
+      badge(
+        excludeDraft.dedup && excludeDraft.window > 0
+          ? "跨轮次窗口 " + excludeDraft.window + " 小时"
+          : "跨轮次窗口：关（同集跨天发布会推两次）",
+        excludeDraft.dedup && excludeDraft.window > 0 ? "ok" : "warn",
       ) +
       (dirty ? badge("有未保存的改动", "warn") : ""),
   });
@@ -1611,7 +1620,7 @@ let subSources = { name: "", items: [] };
 
 // 本会话排除项草稿。预设勾选与自定义词分开存（界面上一个是开关、一个是输入框），
 // 「saved」 是落库那一刻的签名，用来判断有没有未保存的改动。
-let excludeDraft = { presets: [], picked: [], custom: "", shared: [], dedup: true, prefer: [], saved: "" };
+let excludeDraft = { presets: [], picked: [], custom: "", shared: [], dedup: true, prefer: [], window: 0, saved: "" };
 
 const WEEKDAY_OPTIONS = [
   ["0", "按今天"],

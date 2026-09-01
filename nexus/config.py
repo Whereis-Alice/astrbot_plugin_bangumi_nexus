@@ -15,7 +15,12 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .constants import DEFAULT_USER_AGENT, EPISODE_PREFER_DEFAULT, MIN_RSS_INTERVAL_MINUTES
+from .constants import (
+    DEFAULT_USER_AGENT,
+    EPISODE_DEDUP_WINDOW_HOURS,
+    EPISODE_PREFER_DEFAULT,
+    MIN_RSS_INTERVAL_MINUTES,
+)
 from .dedup import normalize_prefer
 
 RENDERERS = ("auto", "html", "raster", "t2i", "text")
@@ -189,6 +194,8 @@ class NexusConfig:
     rss_episode_dedup: bool = True
     #: 同集归并时的优选顺序，越靠前优先级越高。
     rss_episode_prefer: tuple[str, ...] = EPISODE_PREFER_DEFAULT
+    #: 同集归并的跨轮次时间窗（小时）。0 表示只在单次轮询内归并。
+    rss_episode_dedup_window_hours: int = EPISODE_DEDUP_WINDOW_HOURS
     rsshub_base: str = "https://rsshub.app"
     mikan_base: str = "https://mikanani.me"
     # Webhook
@@ -295,6 +302,13 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
         # 否则「填错一个字」等于悄悄关掉归并的偏好，用户只会看到「怎么推的是繁体」。
         rss_episode_prefer=normalize_prefer(_as_list(_get(raw, "rss_episode_prefer", ())))
         or EPISODE_PREFER_DEFAULT,
+        # 上限 336 小时（14 天）：再长就会把下一集也算进同一个窗口。
+        rss_episode_dedup_window_hours=_as_int(
+            _get(raw, "rss_episode_dedup_window_hours", EPISODE_DEDUP_WINDOW_HOURS),
+            EPISODE_DEDUP_WINDOW_HOURS,
+            low=0,
+            high=336,
+        ),
         rsshub_base=_as_str(_get(raw, "rsshub_base", ""), "https://rsshub.app").rstrip("/"),
         mikan_base=_as_str(_get(raw, "mikan_base", ""), "https://mikanani.me").rstrip("/"),
         webhook_enabled=_as_bool(_get(raw, "webhook_enabled", False), False),

@@ -169,7 +169,11 @@
     },
     "rss_episode_dedup": {
       "description": "Push only one release per episode",
-      "hint": "A fansub group often posts the same episode as simplified/traditional, 1080p/720p, Baha/ABEMA variants. When on, those variants are merged down to the best match for your preference and the rest is skipped silently; a revision such as «01v2» wins over the original. Safer than excluding a source outright — excluding ABEMA means missing the episode entirely whenever Baha has no release."
+      "hint": "A fansub group often re-encodes the same episode from Baha / ABEMA / CR / B-Global and then ships simplified and traditional, 1080p and 720p variants of each — four to six items for one episode. When on, only one release per episode is pushed, chosen by «Episode preference order»; the rest is skipped silently, and a revision such as «01v2» wins over the original. Releases with no detectable episode number (movies, batches, announcements) are never merged. Note that merging is first-come-first-served: when the sources land on different days, whichever arrives first is the one you get, so use excludes if you want to lock a specific source."
+    },
+    "rss_episode_dedup_window_hours": {
+      "description": "Cross-poll merge window for episodes (hours)",
+      "hint": "The four sources for one episode often land on different days (one to five days apart in practice). Merging inside a single poll only is not enough: the first arrival is pushed right away and the later ones look like brand-new items on the next poll. With this window on, once an episode has been pushed, other releases of that same episode arriving within the window are skipped silently; revisions such as «01v2» are still pushed. 0 = off, merge inside a single poll only; 48 is recommended."
     },
     "rss_episode_prefer": {
       "description": "Preference order for episode merging",

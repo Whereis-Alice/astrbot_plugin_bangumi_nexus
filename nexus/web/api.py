@@ -202,6 +202,7 @@ CONF_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "rss_history_days",
             "global_excludes",
             "rss_episode_dedup",
+            "rss_episode_dedup_window_hours",
             "rss_episode_prefer",
             "rsshub_base",
             "mikan_base",
@@ -661,6 +662,7 @@ class NexusService:
             "expanded": list(expand_excludes((*shared, *chosen))),
             "episode_dedup": bool(conf.rss_episode_dedup),
             "episode_prefer": list(conf.rss_episode_prefer),
+            "episode_window_hours": int(conf.rss_episode_dedup_window_hours),
         }
 
     async def save_excludes(self, payload: Mapping[str, Any]) -> dict[str, Any]:

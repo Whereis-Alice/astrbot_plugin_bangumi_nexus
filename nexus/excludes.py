@@ -11,7 +11,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from .constants import DUAL_LANGUAGE_MARKERS, EXCLUDE_PRESET_BY_NAME, LANGUAGE_ONLY_WORDS
+from .constants import (
+    DUAL_LANGUAGE_MARKERS,
+    EXCLUDE_PRESET_BY_NAME,
+    LANGUAGE_ONLY_WORDS,
+    SIMPLIFIED_ONLY_WORDS,
+    TRADITIONAL_ONLY_WORDS,
+)
 
 __all__ = ["blocked_by", "expand_excludes", "is_dual_language"]
 
@@ -40,11 +46,37 @@ def expand_excludes(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
-def is_dual_language(title: str) -> bool:
-    """这条发布是不是「一个文件里同时装了简体和繁体」。"""
+def _fold(title: str) -> str:
+    """把标题折成便于子串匹配的形态：小写 + 全角连接符归一。
 
-    text = (title or "").lower()
-    return any(marker in text for marker in DUAL_LANGUAGE_MARKERS)
+    字幕组写 「CHS＆CHT」（全角 「＆」）的不少，不归一就得在每张词表里各配一份全角版。
+    """
+
+    return (title or "").lower().replace("＆", "&").replace("＋", "+")
+
+
+def is_dual_language(title: str) -> bool:
+    """这条发布是不是「一个文件里同时装了简体和繁体」。
+
+    两条判据，命中任一即算双语：
+
+    1. 显式的双语写法（「简繁日内封」「CHS&CHT」）—— 词表在 「DUAL_LANGUAGE_MARKERS」。
+    2. 标题里**同时**出现简体侧词与繁体侧词（「[CHS][CHT]」「[GB][BIG5]」）。
+
+    为什么两条都要留：第 2 条覆盖不了 「[简繁日内封]」 —— 它只命中繁体侧的 「繁日」，
+    简体侧的 「简体/简日/简中/CHS」 一个都不含，靠的是显式标记 「简繁」 兜住；
+    第 1 条又覆盖不了字幕组把两个标记分写成两个方括号的情况，词表永远追不完。
+
+    误判方向是安全的那一侧：把单语当成双语，后果只是多推一条不想要的版本；
+    反过来把双语当成单语，后果是整集静默收不到。
+    """
+
+    text = _fold(title)
+    if any(marker in text for marker in DUAL_LANGUAGE_MARKERS):
+        return True
+    return any(word in text for word in SIMPLIFIED_ONLY_WORDS) and any(
+        word in text for word in TRADITIONAL_ONLY_WORDS
+    )
 
 
 def blocked_by(title: str, words: Iterable[str]) -> str:
@@ -59,10 +91,10 @@ def blocked_by(title: str, words: Iterable[str]) -> str:
       真想连双语单文件一起躲，勾 「简繁」 那组预设。
     """
 
-    text = (title or "").lower()
+    text = _fold(title)
     dual = is_dual_language(title)
     for word in words:
-        needle = str(word or "").lower()
+        needle = _fold(word)
         if not needle.strip() or needle not in text:
             continue
         if dual and needle in LANGUAGE_ONLY_WORDS:

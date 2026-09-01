@@ -26,7 +26,7 @@ from .models import Subscription, WatchItem
 
 T = TypeVar("T")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS watchlist (
@@ -70,6 +70,18 @@ CREATE TABLE IF NOT EXISTS push_history (
     PRIMARY KEY (uid, umo)
 );
 CREATE INDEX IF NOT EXISTS idx_history_at ON push_history(at);
+
+CREATE TABLE IF NOT EXISTS episode_history (
+    umo         TEXT    NOT NULL DEFAULT '',
+    sub_id      INTEGER NOT NULL DEFAULT 0,
+    series_key  TEXT    NOT NULL,
+    episode     TEXT    NOT NULL,
+    revision    INTEGER NOT NULL DEFAULT 1,
+    title       TEXT    NOT NULL DEFAULT '',
+    at          REAL    NOT NULL DEFAULT 0,
+    PRIMARY KEY (umo, sub_id, series_key, episode)
+);
+CREATE INDEX IF NOT EXISTS idx_episode_at ON episode_history(at);
 
 CREATE TABLE IF NOT EXISTS session_prefs (
     umo    TEXT NOT NULL,
@@ -127,6 +139,7 @@ class Store:
         conn.executescript(_SCHEMA)
         current = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
         # 迁移脚本按版本追加即可；空 dict 表示当前版本无需额外 DDL。
+        # v2 新增的 「episode_history」 表由上面的建表脚本幂等创建，无需补 DDL。
         migrations: dict[int, tuple[str, ...]] = {}
         for version in range(current + 1, SCHEMA_VERSION + 1):
             for statement in migrations.get(version, ()):
@@ -477,6 +490,9 @@ class Store:
         def _work() -> bool:
             conn = self._connection()
             cursor = conn.execute("DELETE FROM subscriptions WHERE id=?", (sub_id,))
+            # 同集记账跟着订阅走：留着是死数据，而 「id」 是自增的，
+            # 复用到同一个号时会让新订阅第一轮莫名少推几条。
+            conn.execute("DELETE FROM episode_history WHERE sub_id=?", (sub_id,))
             conn.commit()
             return cursor.rowcount > 0
 
@@ -486,6 +502,7 @@ class Store:
         def _work() -> int:
             conn = self._connection()
             cursor = conn.execute("DELETE FROM subscriptions WHERE umo=?", (umo,))
+            conn.execute("DELETE FROM episode_history WHERE umo=?", (umo,))
             conn.commit()
             return cursor.rowcount
 
@@ -537,14 +554,77 @@ class Store:
 
         return await self._run(_work)
 
+    # -- 跨轮次的同集记账 ---------------------------------------------------
+
+    async def recent_episodes(
+        self, umo: str, sub_id: int, *, window_hours: float
+    ) -> dict[tuple[str, str], int]:
+        """取这条订阅在时间窗内推过的集，返回 「(作品键, 集数) -> 已推的修订号」。
+
+        为什么必须落库而不是留在内存里：同一集的四个片源发布日期能跨两天，
+        「哪一集推过了」 得跨轮询、跨重启都记得住，否则归并只在一次轮询内有效。
+        """
+
+        span = max(0.0, float(window_hours)) * 3600.0
+        if span <= 0:
+            return {}
+        cutoff = time.time() - span
+
+        def _work() -> dict[tuple[str, str], int]:
+            conn = self._connection()
+            rows = conn.execute(
+                "SELECT series_key, episode, revision FROM episode_history "
+                "WHERE umo=? AND sub_id=? AND at >= ?",
+                (umo, int(sub_id), cutoff),
+            ).fetchall()
+            return {(row["series_key"], row["episode"]): int(row["revision"]) for row in rows}
+
+        return await self._run(_work)
+
+    async def remember_episodes(
+        self, umo: str, sub_id: int, rows: Iterable[tuple[str, str, int, str]]
+    ) -> int:
+        """记下「这一集已经推过了」。入参为 「(作品键, 集数, 修订号, 标题)」。
+
+        用 「INSERT OR REPLACE」 覆盖旧记录并刷新时间戳：推的是 v2 时要把修订号顶上去，
+        时间戳也该按最新一次推送算 —— 窗口意义是「距离上次推这一集多久」。
+        """
+
+        now = time.time()
+        payload = [
+            (umo, int(sub_id), series, episode, int(rev), (title or "")[:300], now)
+            for series, episode, rev, title in rows
+            if series and episode
+        ]
+        if not payload:
+            return 0
+
+        def _work() -> int:
+            conn = self._connection()
+            conn.executemany(
+                "INSERT OR REPLACE INTO episode_history"
+                "(umo, sub_id, series_key, episode, revision, title, at) VALUES (?,?,?,?,?,?,?)",
+                payload,
+            )
+            conn.commit()
+            return len(payload)
+
+        return await self._run(_work)
+
     async def prune_history(self, days: int) -> int:
+        """清理过期的推送记录。两张表一起清 —— 漏掉哪张都会无限膨胀。"""
+
         cutoff = time.time() - max(1, days) * 86400
 
         def _work() -> int:
             conn = self._connection()
             cursor = conn.execute("DELETE FROM push_history WHERE at < ?", (cutoff,))
+            removed = cursor.rowcount
+            # 同集记账的窗口最长也就几天，跟 「rss_history_days」 共用同一条清理线足够。
+            extra = conn.execute("DELETE FROM episode_history WHERE at < ?", (cutoff,))
+            removed += extra.rowcount
             conn.commit()
-            return cursor.rowcount
+            return removed
 
         return await self._run(_work)
 

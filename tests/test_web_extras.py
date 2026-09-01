@@ -74,6 +74,7 @@ def _service(
         global_excludes=global_excludes,
         rss_episode_dedup=True,
         rss_episode_prefer=EPISODE_PREFER_DEFAULT,
+        rss_episode_dedup_window_hours=48,
     )
     deps = SimpleNamespace(
         store=store,

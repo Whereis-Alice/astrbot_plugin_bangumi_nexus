@@ -163,3 +163,53 @@ class TestReleaseTagBoundary:
     def test_真正的简体标记还在(self) -> None:
         assert "简体" in release_tags("[Group] Show - 03 [1080p][GB_JP]")
         assert "简体" in release_tags("[Group] Show - 03 [1080p][简日双语]")
+
+
+class Test双语标记分写在两个方括号:
+    """字幕组把简繁标记分成两段写时，词表追不完，得靠「两侧都命中」这条通用判据。
+
+    为什么补这条：「DUAL_LANGUAGE_MARKERS」 是硬编码词表，只覆盖 「CHS&CHT」 这种
+    连写形式。真实标题里 「[CHS][CHT]」「[GB][BIG5]」 同样常见，它们照样是一个文件
+    装两条字幕，被「不要繁体」拦掉等于整集收不到。
+    """
+
+    def test_chs_cht_分写算双语(self) -> None:
+        title = "[某组][某作品][05][1080p][CHS][CHT]"
+        assert is_dual_language(title) is True
+        assert blocked_by(title, expand_excludes(["繁体"])) == ""
+
+    def test_gb_big5_分写算双语(self) -> None:
+        title = "[某组][某作品][05][1080p][GB][BIG5][MP4]"
+        assert is_dual_language(title) is True
+        assert blocked_by(title, expand_excludes(["繁体"])) == ""
+
+    def test_简日和繁日同时出现算双语(self) -> None:
+        """有的组写成 「[简日][繁日]」 两轨分标 —— 中文两侧都在，就是双语。"""
+
+        title = "[某组][某作品][05][1080p][简日][繁日]"
+        assert is_dual_language(title) is True
+
+    def test_全角连接符也认(self) -> None:
+        """「CHS＆CHT」 用全角 「＆」 的组不少，不归一化就得给每张词表配全角版。"""
+
+        title = "[某组][某作品][05][1080p][CHS＆CHT]"
+        assert is_dual_language(title) is True
+        assert blocked_by(title, expand_excludes(["繁体"])) == ""
+
+    def test_单侧标记仍算单语(self) -> None:
+        """只有繁体侧标记的必须照常被拦，否则「两侧都命中」这条判据就成了后门。"""
+
+        for title in (
+            "[某组][某作品][05][1080p][CHT][MP4]",
+            "[某组][某作品][05][1080p][BIG5]",
+            "[某组][某作品][05][1080p][繁日双语]",
+        ):
+            assert is_dual_language(title) is False
+            assert blocked_by(title, expand_excludes(["繁体"])) != ""
+
+    def test_体积标注不会伪造出双语(self) -> None:
+        """「[2.1GB]」 曾把纯繁体发布伪装成双语放行。简体侧只认 「[GB」，不认 「GB]」。"""
+
+        title = "[某组][某作品][05][1080p][CHT][2.1GB]"
+        assert is_dual_language(title) is False
+        assert blocked_by(title, expand_excludes(["繁体"])) == "CHT"

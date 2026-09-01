@@ -209,14 +209,29 @@ DUAL_LANGUAGE_MARKERS: tuple[str, ...] = (
     "big5_gb",
 )
 
-#: 只在「单语」时才算命中的关键词，即上面 「简体」/「繁体」 两组预设的全部写法。
-#: 标题里出现 「DUAL_LANGUAGE_MARKERS」 时，这些词的命中一律作废（见 「blocked_by」）。
-#: 「简繁」 那组预设不在此列 —— 勾它的人要的正是「双语单文件也别给我」。
-LANGUAGE_ONLY_WORDS: frozenset[str] = frozenset(
-    word.lower() for name in ("简体", "繁体") for word in dict(EXCLUDE_PRESETS)[name]
+#: 「简体」组的全部写法（小写）。
+SIMPLIFIED_ONLY_WORDS: frozenset[str] = frozenset(
+    word.lower() for word in dict(EXCLUDE_PRESETS)["简体"]
 )
 
+#: 「繁体」组的全部写法（小写）。
+TRADITIONAL_ONLY_WORDS: frozenset[str] = frozenset(
+    word.lower() for word in dict(EXCLUDE_PRESETS)["繁体"]
+)
+
+#: 只在「单语」时才算命中的关键词，即上面 「简体」/「繁体」 两组预设的全部写法。
+#: 标题里出现双语迹象时，这些词的命中一律作废（见 「blocked_by」）。
+#: 「简繁」 那组预设不在此列 —— 勾它的人要的正是「双语单文件也别给我」。
+LANGUAGE_ONLY_WORDS: frozenset[str] = SIMPLIFIED_ONLY_WORDS | TRADITIONAL_ONLY_WORDS
+
 EXCLUDE_PRESET_BY_NAME = dict(EXCLUDE_PRESETS)
+
+#: 跨轮次同集归并的默认时间窗（小时）。0 表示只在单次轮询的批次内归并。
+#: 为什么默认 48：实测同一个组的四个片源发布日期能跨两天（CR 8/31 → Baha 9/1，
+#: ABEMA 甚至晚五天），只在一次轮询里归并等于形同虚设 —— 先到的那一版当轮就推，
+#: 后到的下一轮又被当成新条目再推一次，一集照样刷两三条。窗口开到两天覆盖绝大
+#: 多数场景，又短于常规周更间隔（7 天），所以下一集不会被上一集的记录挡住。
+EPISODE_DEDUP_WINDOW_HOURS: int = 48
 
 #: 同一集出现多个版本时的默认优选顺序（靠前的优先留下）。
 #: 为什么需要：一个字幕组常把同一集分别从 Baha、ABEMA 压两版，再各出简体/繁体、

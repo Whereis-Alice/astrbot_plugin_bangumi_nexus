@@ -318,3 +318,66 @@ class TestSilentKinds:
 
         service = _service(NexusConfig(webhook_silent_kinds=("whatever",)))
         assert service.silent_kinds() == frozenset({"whatever"})
+
+
+class TestFoldEvent:
+    """事件名归一化。真实用户会在模板里写出各种意想不到的花样。"""
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("🎈开始下载", "download_start"),
+            ("🎉下载完成", "download_complete"),
+            ("⛔缺少集数", "episode_missing"),
+            ("❌发生错误", "download_error"),
+            ("🎊订阅完结", "series_completed"),
+            ("🐟摸鱼检测", "idle_warning"),
+            ("🎈 开始下载", "download_start"),
+            ("[下载完成]", "download_complete"),
+            ("【下载完成】", "download_complete"),
+        ],
+    )
+    def test_emoji_prefixed_action(self, text: str, expected: str) -> None:
+        """「${emoji}${action}」 拼出来的串必须照样认得出。"""
+
+        assert webhook.fold_event(text) == expected
+        assert webhook.classify({"event": text}) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("download complete", "download_complete"),
+            ("Download-Complete", "download_complete"),
+            ("download started", "download_start"),
+            ("  DOWNLOAD_ERROR  ", "download_error"),
+        ],
+    )
+    def test_separator_variants(self, text: str, expected: str) -> None:
+        """空格、连字符、大小写都归一化到下划线小写。"""
+
+        assert webhook.fold_event(text) == expected
+
+    def test_longer_alias_wins(self) -> None:
+        """「download_error」 不能被更短的 「download」 抢走。"""
+
+        assert webhook.fold_event("[download_error]") == "download_error"
+        assert webhook.fold_event("rss_error") == "rss_error"
+        assert webhook.fold_event("rss_update") == "new_episode"
+
+    def test_generic_alias_needs_exact_hit(self) -> None:
+        """通用短词只精确命中，一整段标题文本不该被误判成事件名。"""
+
+        assert webhook.fold_event("start") == "download_start"
+        assert webhook.fold_event("【ANi】某番 - 05 [1080P]") == ""
+        assert webhook.fold_event("restart the container") == ""
+
+    def test_unknown_returns_blank(self) -> None:
+        assert webhook.fold_event("") == ""
+        assert webhook.fold_event("   ") == ""
+        assert webhook.fold_event("test") == ""
+
+    def test_classify_falls_back_when_unfolded(self) -> None:
+        """折不出来时还是走字段推断，不能因为归一化失败就崩。"""
+
+        assert webhook.classify({"event": "test"}) == "new_episode"
+        assert webhook.classify({"event": "unknown", "file_name": "x.mkv"}) == "download_complete"

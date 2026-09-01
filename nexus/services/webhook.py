@@ -102,6 +102,24 @@ KIND_PHRASE = {
 # 这些事件意味着「这一集已经能看了」，可以顺手推进追番进度。
 PROGRESS_KINDS = frozenset({"rename_complete", "download_complete"})
 
+# 归一化事件串时要抹掉的装饰字符。有人喜欢在模板里写 「[下载完成]」。
+_EVENT_TRIM = "[]【】()（）「」<>《》:：·|/\\'\"“”"
+
+# 这些别名太通用（一句话里随便就能撞上 「start」），只允许精确命中，不参与
+# 宽松的子串匹配，免得把一整段描述文本误判成事件名。
+_STRICT_ONLY = frozenset(
+    {"new", "start", "update", "download", "complete", "rename", "error", "missing", "omit"}
+)
+
+# 宽松匹配的候选表：长别名排前面，「download_error」 才不会被 「download」 抢走。
+_LOOSE_ALIASES: tuple[tuple[str, str], ...] = tuple(
+    sorted(
+        ((key, kind) for key, kind in EVENT_ALIASES.items() if key not in _STRICT_ONLY),
+        key=lambda pair: len(pair[0]),
+        reverse=True,
+    )
+)
+
 # 请求头里可以带 token 的几种常见写法。
 TOKEN_HEADERS = ("x-webhook-token", "x-token", "authorization")
 
@@ -204,8 +222,7 @@ class WebhookService:
             token = str(item).strip()
             if not token:
                 continue
-            lowered = token.lower()
-            folded.add(EVENT_ALIASES.get(lowered, lowered))
+            folded.add(fold_event(token) or token.lower())
         return frozenset(folded)
 
     def _verify(self, expected: str, token: str, headers: Mapping[str, str] | None) -> None:
@@ -394,11 +411,32 @@ class WebhookService:
 # ---------------------------------------------------------------------------
 # 纯函数：分类与字段提取（便于单测）
 # ---------------------------------------------------------------------------
+def fold_event(text: str) -> str:
+    """把五花八门的事件写法折成内部 kind，折不出来返回空串。
+
+    上游写法实在太杂：AutoBangumi 用 「download_complete」，ani-rss 用中文动作名，
+    图省事的人会在 body 里写 「${emoji}${action}」 得到 「🎉下载完成」，还有人爱加
+    方括号或空格。所以分三步：原样精确匹配 → 归一化分隔符后精确匹配 → 子串匹配。
+    """
+    raw = (text or "").strip().lower()
+    if not raw:
+        return ""
+    squeezed = re.sub(r"[\s\-.]+", "_", raw.strip(_EVENT_TRIM).strip()).strip("_")
+    for candidate in (raw, squeezed):
+        mapped = EVENT_ALIASES.get(candidate)
+        if mapped:
+            return mapped
+    for key, kind in _LOOSE_ALIASES:
+        if key in raw:
+            return kind
+    return ""
+
+
 def classify(raw: Mapping[str, Any]) -> str:
     """识别事件类型：先看显式字段，再按字段组合推断。"""
     explicit = _first(raw, "event", "type", "event_type", "notify_type", "action")
     if explicit:
-        mapped = EVENT_ALIASES.get(explicit.strip().lower())
+        mapped = fold_event(explicit)
         if mapped:
             return mapped
 
@@ -480,5 +518,6 @@ __all__ = [
     "WebhookAuthError",
     "WebhookService",
     "classify",
+    "fold_event",
     "parse_episode_marker",
 ]

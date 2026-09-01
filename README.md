@@ -835,8 +835,10 @@ webhook_silent_kinds = ["下载完成"]
 | 摸鱼检测 | 🐟 | `idle_warning` | — | 普通 |
 | 整理完成（AutoBangumi） | — | `rename_complete` | ✅ | 普通 |
 
-中文动作名、emoji、英文标识三种写法都认。万一都对不上，插件会看字段自己推断
-（有 `error` 字段当失败、带集数当新集），不会把这条请求直接丢掉。
+中文动作名、emoji、英文标识三种写法都认，**混在一起也认** —— 有人图省事在模板里写
+`"event": "${emoji}${action}"`，出来是 `🎉下载完成`，插件照样能折回 `download_complete`。
+空格、连字符、方括号（`download complete` / `Download-Complete` / `[下载完成]`）同样处理。
+万一都对不上，插件会看字段自己推断（有 `error` 字段当失败、带集数当新集），不会把这条请求直接丢掉。
 
 没给 `episode` 字段也没关系：ani-rss 的 `${message}` 里天然带着 `S01E05` 这种串，插件会从里面把季/集抠出来。
 封面是 ani-rss 的占位图（`null.png`）时会自动丢掉，改去 Bangumi 拿一张真海报。

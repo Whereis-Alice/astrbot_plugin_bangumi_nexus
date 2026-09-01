@@ -901,11 +901,20 @@ RENDERERS.overview = () => {
         ["Webhook 开关", webhook.enabled ? "已开启" : "已关闭"],
         ["令牌", webhook.token_set ? "已设置" : "未设置"],
         ["最近一次", webhook.last_at ? relative(webhook.last_at) + "（" + (webhook.last_kind || "未知事件") + "）" : "从未"],
-        ["独立监听", listener.running ? listener.host + ":" + listener.port + listener.route : "未启动"],
+        [
+          "独立监听",
+          listener.running
+            ? listener.host + ":" + listener.port + listener.route +
+              (listener.deferred ? "（慢事件转后台 " + num(listener.deferred) + " 次）" : "")
+            : "未启动",
+        ],
         ["人格转述", conf.persona_reply_enabled ? "已开启" : "已关闭"],
       ]) +
       (webhook.enabled && !webhook.token_set
         ? note("Webhook 已开启但没有设置令牌。若同时开了独立监听端口，插件会拒绝启动监听——请先在「配置 · Webhook 接入」里填一个足够长的随机串。", "danger")
+        : "") +
+      (listener.deferred
+        ? note("有 " + num(listener.deferred) + " 条事件因为人格转述或封面渲染偏慢，先回了 202「已受理」，卡片随后在后台补发——这是正常行为，不是失败，ani-rss 不会重推。")
         : ""),
   });
 

@@ -4,10 +4,14 @@
 完全对不上事件。ani-rss 更极端：它的 body 只能塞占位符，事件名出来是中文
 动作名或 emoji，所以别名表一旦漏项，「下载完成」 就会被当成 「新集更新」，
 进度回填静静失效。这里把这些边界全部钉死。
+
+后半段测的是独立监听端口本身：裸 HTTP 解析、超时分工（读用 「READ_TIMEOUT」、
+办事用 「ACK_TIMEOUT」）、以及「慢事件先回 202、后台照样发完」这条线上踩过的坑。
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any, cast
@@ -381,3 +385,412 @@ class TestFoldEvent:
 
         assert webhook.classify({"event": "test"}) == "new_episode"
         assert webhook.classify({"event": "unknown", "file_name": "x.mkv"}) == "download_complete"
+
+
+class _Recorder:
+    """把活动日志收下来，好断言 202 分支与后台失败真的留了痕迹。"""
+
+    def __init__(self) -> None:
+        self.infos: list[str] = []
+        self.warns: list[str] = []
+
+    def info(self, scope: str, text: str) -> None:
+        self.infos.append(text)
+
+    def warn(self, scope: str, text: str) -> None:
+        self.warns.append(text)
+
+    def error(self, scope: str, text: str) -> None:
+        self.warns.append(text)
+
+
+class _Writer:
+    """「asyncio.StreamWriter」 的最小替身，只记下写出去的字节。"""
+
+    def __init__(self, peer: str = "203.0.113.9") -> None:
+        self.chunks: list[bytes] = []
+        self.closed = False
+        self._peer = (peer, 54321)
+
+    def get_extra_info(self, name: str) -> Any:
+        return self._peer if name == "peername" else None
+
+    def write(self, data: bytes) -> None:
+        self.chunks.append(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    @property
+    def text(self) -> str:
+        return b"".join(self.chunks).decode("utf-8", "replace")
+
+
+def _reader(raw: bytes, *, eof: bool = True) -> asyncio.StreamReader:
+    """喂真字节的流。不 「feed_eof」 就能模拟「写一半就发呆」的对端。"""
+
+    reader = asyncio.StreamReader()
+    reader.feed_data(raw)
+    if eof:
+        reader.feed_eof()
+    return reader
+
+
+def _raw(
+    method: str = "POST",
+    path: str = "/nexus/notify",
+    *,
+    headers: dict[str, str] | None = None,
+    body: bytes = b"",
+) -> bytes:
+    """手搓一条 HTTP 请求。用真字节而不是打桩，才盯得住解析层。"""
+
+    fields = dict(headers or {})
+    if body and not any(key.lower() == "content-length" for key in fields):
+        fields["Content-Length"] = str(len(body))
+    head = method + " " + path + " HTTP/1.1\r\n"
+    for key, value in fields.items():
+        head += key + ": " + value + "\r\n"
+    return head.encode("latin-1") + b"\r\n" + body
+
+
+async def _ok_handler(payload: Any, *, token: str, headers: Any) -> dict[str, Any]:
+    return {"ok": True, "echo": payload, "token": token}
+
+
+def _listen(handler: Any, *, activity: Any = None) -> listener.WebhookListener:
+    """构造一个不真正 bind 端口的监听器：这几组用例只走内部方法。"""
+
+    return listener.WebhookListener(
+        handler=handler,
+        route="nexus/notify",
+        port=19520,
+        token_missing=False,
+        activity=cast(Any, activity if activity is not None else _Activity()),
+    )
+
+
+class TestReadRequest:
+    """裸字节 → 「_Request」 的解析边界。"""
+
+    async def test_parses_request(self) -> None:
+        raw = _raw(headers={"X-Webhook-Token": "abc"}, body=b'{"a":1}')
+        request = await listener._read_request(_reader(raw))
+        assert request.method == "POST"
+        assert request.path == "/nexus/notify"
+        assert request.headers["x-webhook-token"] == "abc"
+        assert request.body == b'{"a":1}'
+
+    async def test_query_and_fragment_dropped(self) -> None:
+        request = await listener._read_request(_reader(_raw(path="/nexus/notify?x=1#f")))
+        assert request.path == "/nexus/notify"
+
+    async def test_method_is_upper_cased(self) -> None:
+        request = await listener._read_request(_reader(_raw(method="get")))
+        assert request.method == "GET"
+
+    async def test_declared_body_too_large(self) -> None:
+        raw = _raw(headers={"Content-Length": str(listener.MAX_BODY_BYTES * 4)})
+        with pytest.raises(listener._RequestTooLarge):
+            await listener._read_request(_reader(raw))
+
+    async def test_malformed_request_line(self) -> None:
+        with pytest.raises(listener._MalformedRequest):
+            await listener._read_request(_reader(b"POST\r\n\r\n"))
+
+    async def test_header_line_too_long(self) -> None:
+        raw = _raw(headers={"X-Pad": "p" * (listener.MAX_LINE_BYTES + 16)})
+        with pytest.raises(ValueError):
+            await listener._read_request(_reader(raw))
+
+    async def test_too_many_headers(self) -> None:
+        headers = {"X-Pad-" + str(i): "v" for i in range(listener.MAX_HEADERS + 4)}
+        with pytest.raises(ValueError):
+            await listener._read_request(_reader(_raw(headers=headers)))
+
+    async def test_empty_stream_is_incomplete(self) -> None:
+        with pytest.raises(asyncio.IncompleteReadError):
+            await listener._read_request(_reader(b""))
+
+
+class TestServeOnce:
+    """请求 → 「(状态码, 响应体)」 的路由与错误映射。"""
+
+    async def test_probe_needs_no_token(self) -> None:
+        lst = _listen(_ok_handler)
+        status, body = await lst._serve_once(_reader(_raw(method="GET")))
+        assert status == 200
+        assert body["ready"] is True
+
+    async def test_options_is_no_content(self) -> None:
+        lst = _listen(_ok_handler)
+        status, _ = await lst._serve_once(_reader(_raw(method="OPTIONS", path="/anything")))
+        assert status == 204
+
+    async def test_unknown_path_is_404(self) -> None:
+        lst = _listen(_ok_handler)
+        status, _ = await lst._serve_once(_reader(_raw(path="/nope")))
+        assert status == 404
+
+    async def test_put_is_405(self) -> None:
+        lst = _listen(_ok_handler)
+        status, _ = await lst._serve_once(_reader(_raw(method="PUT")))
+        assert status == 405
+
+    async def test_bad_json_is_400(self) -> None:
+        lst = _listen(_ok_handler)
+        status, body = await lst._serve_once(_reader(_raw(body=b"not-json")))
+        assert status == 400
+        assert "JSON" in body["error"]
+
+    async def test_empty_body_becomes_object(self) -> None:
+        lst = _listen(_ok_handler)
+        status, body = await lst._serve_once(_reader(_raw()))
+        assert status == 200
+        assert body["echo"] == {}
+
+    async def test_oversized_body_is_413(self) -> None:
+        raw = _raw(headers={"Content-Length": str(listener.MAX_BODY_BYTES * 4)})
+        lst = _listen(_ok_handler)
+        status, _ = await lst._serve_once(_reader(raw))
+        assert status == 413
+
+    async def test_bad_request_line_is_400(self) -> None:
+        lst = _listen(_ok_handler)
+        status, _ = await lst._serve_once(_reader(b"OOPS\r\n\r\n"))
+        assert status == 400
+
+    async def test_long_header_is_431(self) -> None:
+        raw = _raw(headers={"X-Pad": "p" * (listener.MAX_LINE_BYTES + 16)})
+        lst = _listen(_ok_handler)
+        status, _ = await lst._serve_once(_reader(raw))
+        assert status == 431
+
+    async def test_slow_client_is_408(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """读超时要回 408 而不是 400：是对端没写完，不是内容不合法。"""
+
+        monkeypatch.setattr(listener, "READ_TIMEOUT", 0.05)
+        lst = _listen(_ok_handler)
+        reader = _reader(b"POST /nexus/notify HTTP/1.1\r\n", eof=False)
+        status, body = await lst._serve_once(reader)
+        assert status == 408
+        assert body["error"] == "请求读取超时"
+
+    async def test_token_and_payload_are_forwarded(self) -> None:
+        seen: dict[str, Any] = {}
+
+        async def handler(payload: Any, *, token: str, headers: Any) -> dict[str, Any]:
+            seen["payload"] = payload
+            seen["token"] = token
+            seen["custom"] = headers.get("x-custom", "")
+            return {"ok": True}
+
+        raw = _raw(
+            headers={"Authorization": "Bearer secret", "X-Custom": "1"},
+            body=b'{"event":"download_complete"}',
+        )
+        lst = _listen(handler)
+        status, _ = await lst._serve_once(_reader(raw))
+        assert status == 200
+        assert seen["token"] == "secret"
+        assert seen["payload"]["event"] == "download_complete"
+        assert seen["custom"] == "1"
+        assert lst.stats()["requests"] == 1
+
+    async def test_auth_error_is_401(self) -> None:
+        async def handler(payload: Any, *, token: str, headers: Any) -> dict[str, Any]:
+            raise webhook.WebhookAuthError("令牌不对")
+
+        lst = _listen(handler)
+        status, body = await lst._serve_once(_reader(_raw(body=b"{}")))
+        assert status == 401
+        assert body["error"] == "令牌不对"
+
+    async def test_value_error_is_400(self) -> None:
+        async def handler(payload: Any, *, token: str, headers: Any) -> dict[str, Any]:
+            raise ValueError("缺少标题")
+
+        lst = _listen(handler)
+        status, body = await lst._serve_once(_reader(_raw(body=b"{}")))
+        assert status == 400
+        assert body["error"] == "缺少标题"
+
+
+class TestDeferredInvoke:
+    """这一组盯的是线上真出过的事故：人格 LLM 比读超时还慢。
+
+    旧代码把「读请求」和「办事情」塞进同一个 15 秒 「wait_for」，于是 LLM 一慢
+    就同时踩两个坑：既回 400 让推送端以为失败（可能重推），又把正在投递的
+    协程取消掉（通知发一半）。现在必须是「先回 202，后台跑完」。
+    """
+
+    async def test_slow_handler_gets_202(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(listener, "ACK_TIMEOUT", 0.05)
+        finished = asyncio.Event()
+
+        async def handler(payload: Any, *, token: str, headers: Any) -> dict[str, Any]:
+            await asyncio.sleep(0.15)
+            finished.set()
+            return {"ok": True, "late": True}
+
+        recorder = _Recorder()
+        lst = _listen(handler, activity=recorder)
+        status, body = await lst._serve_once(_reader(_raw(body=b"{}")))
+        assert status == 202
+        assert body["pending"] is True
+        assert lst.stats()["deferred"] == 1
+        assert lst.stats()["pending"] == 1
+        task = next(iter(lst._pending))
+
+        # 关键断言：回过 202 之后任务必须还活着，不能被 「wait_for」 顺手取消。
+        assert await asyncio.wait_for(task, timeout=2.0) == {"ok": True, "late": True}
+        assert finished.is_set()
+        assert lst.stats()["pending"] == 0
+        assert any("202" in text for text in recorder.infos)
+
+    async def test_deferred_failure_is_logged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """202 之后再炸，就只剩活动日志能兜底，别让它静默消失。"""
+
+        monkeypatch.setattr(listener, "ACK_TIMEOUT", 0.05)
+
+        async def handler(payload: Any, *, token: str, headers: Any) -> dict[str, Any]:
+            await asyncio.sleep(0.1)
+            raise ValueError("番剧标题为空")
+
+        recorder = _Recorder()
+        lst = _listen(handler, activity=recorder)
+        status, _ = await lst._serve_once(_reader(_raw(body=b"{}")))
+        assert status == 202
+        task = next(iter(lst._pending))
+        with pytest.raises(ValueError):
+            await task
+        assert any("后台处理被拒绝" in text for text in recorder.warns)
+
+    async def test_fast_handler_is_not_deferred(self) -> None:
+        lst = _listen(_ok_handler)
+        status, _ = await lst._serve_once(_reader(_raw(body=b"{}")))
+        assert status == 200
+        assert lst.stats()["deferred"] == 0
+        assert lst.stats()["pending"] == 0
+
+
+class TestDrainOnStop:
+    """热重载时已受理的通知宁可多等几秒，也不要留下半截状态。"""
+
+    async def test_stop_waits_for_pending(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(listener, "ACK_TIMEOUT", 0.02)
+        monkeypatch.setattr(listener, "DRAIN_TIMEOUT", 3.0)
+        finished = asyncio.Event()
+
+        async def handler(payload: Any, *, token: str, headers: Any) -> dict[str, Any]:
+            await asyncio.sleep(0.1)
+            finished.set()
+            return {"ok": True}
+
+        lst = _listen(handler)
+        status, _ = await lst._serve_once(_reader(_raw(body=b"{}")))
+        assert status == 202
+        await lst.stop()
+        assert finished.is_set()
+        assert lst.stats()["pending"] == 0
+
+    async def test_stop_cancels_stuck_pending(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(listener, "ACK_TIMEOUT", 0.02)
+        monkeypatch.setattr(listener, "DRAIN_TIMEOUT", 0.05)
+
+        async def handler(payload: Any, *, token: str, headers: Any) -> dict[str, Any]:
+            await asyncio.sleep(30)
+            return {"ok": True}
+
+        lst = _listen(handler)
+        status, _ = await lst._serve_once(_reader(_raw(body=b"{}")))
+        assert status == 202
+        task = next(iter(lst._pending))
+        await lst.stop()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+class TestOnClient:
+    """连接层：响应真写回去了，被拒的请求也真记了一笔。"""
+
+    async def test_writes_response_and_closes(self) -> None:
+        lst = _listen(_ok_handler)
+        writer = _Writer()
+        await lst._on_client(cast(Any, _reader(_raw(body=b"{}"))), cast(Any, writer))
+        assert writer.text.startswith("HTTP/1.1 200 OK")
+        assert "application/json" in writer.text
+        assert writer.closed is True
+
+    async def test_rejection_is_counted_with_peer(self) -> None:
+        recorder = _Recorder()
+        lst = _listen(_ok_handler, activity=recorder)
+        writer = _Writer("198.51.100.7")
+        await lst._on_client(cast(Any, _reader(_raw(path="/nope"))), cast(Any, writer))
+        assert writer.text.startswith("HTTP/1.1 404 ")
+        assert lst.stats()["errors"] == 1
+        assert any("198.51.100.7" in text for text in recorder.warns)
+
+    async def test_client_hangup_writes_nothing(self) -> None:
+        """对端半途断开时别硬写响应，也别记成服务端错误。"""
+
+        raw = b"POST /nexus/notify HTTP/1.1\r\nContent-Length: 20\r\n\r\nabc"
+        lst = _listen(_ok_handler)
+        writer = _Writer()
+        await lst._on_client(cast(Any, _reader(raw)), cast(Any, writer))
+        assert writer.chunks == []
+        assert lst.stats()["errors"] == 0
+
+
+class TestListenerStartGuards:
+    """裸端点绝不开：这条约束比「功能可用」优先。"""
+
+    async def test_refuses_without_token(self) -> None:
+        recorder = _Recorder()
+        lst = listener.WebhookListener(
+            handler=_ok_handler,
+            route="nexus/notify",
+            port=19521,
+            token_missing=True,
+            activity=cast(Any, recorder),
+        )
+        assert await lst.start() is False
+        assert lst.running is False
+        assert any("webhook_token" in text for text in recorder.warns)
+
+    async def test_port_zero_is_opt_out(self) -> None:
+        lst = listener.WebhookListener(
+            handler=_ok_handler, route="nexus/notify", port=0, token_missing=False
+        )
+        assert await lst.start() is False
+        assert lst.stats()["uptime"] == 0
+
+
+class TestResponseBytes:
+    """裸 HTTP 响应的字节形状。"""
+
+    def test_reason_covers_every_used_code(self) -> None:
+        for code in (200, 202, 204, 400, 401, 404, 405, 408, 413, 431, 500, 503):
+            assert listener._REASON[code]
+
+    def test_no_content_has_empty_body(self) -> None:
+        raw = listener._response(204, {"ignored": True}).decode("utf-8")
+        assert raw.startswith("HTTP/1.1 204 No Content")
+        assert "Content-Length: 0" in raw
+        assert raw.endswith("\r\n\r\n")
+
+    def test_accepted_carries_json(self) -> None:
+        raw = listener._response(202, {"ok": True}).decode("utf-8")
+        assert raw.startswith("HTTP/1.1 202 Accepted")
+        assert raw.endswith('{"ok": true}')
+
+    def test_peer_of_survives_broken_writer(self) -> None:
+        class _Broken:
+            def get_extra_info(self, name: str) -> Any:
+                raise RuntimeError("连接已经没了")
+
+        assert listener._peer_of(cast(Any, _Broken())) == ""
+        assert listener._peer_of(cast(Any, _Writer("192.0.2.5"))) == "192.0.2.5"

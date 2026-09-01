@@ -191,15 +191,19 @@ class WebhookService:
             deps.activity.warn("webhook", f"{notification.title} 没有匹配的推送目标")
             return {"ok": True, "kind": notification.kind, "delivered": 0, "targets": 0}
 
+        # 先记账，再发卡片。
+        # 通知链路要拉封面、调人格 LLM、渲染卡片，任何一步炸了都不该让
+        # 「这集已经入库」这条既成事实丢掉；回填只碰数据库，几乎不会失败。
+        # 也正因如此，静默事件同样要回填 —— 静默的意义就是「只记账，不刷屏」。
+        if notification.kind in PROGRESS_KINDS:
+            await self._auto_progress(notification, targets)
+
         sent = 0
         if silent:
             self._silenced += 1
         else:
             sent = await self._notifier.dispatch(notification, targets)
             self._delivered += sent
-        # 进度回填与是否发卡片无关：静默事件的意义正是「只记账」。
-        if notification.kind in PROGRESS_KINDS:
-            await self._auto_progress(notification, targets)
         tail = "静默记账" if silent else f"→ {sent}/{len(targets)}"
         deps.activity.info("webhook", f"{notification.title} · {notification.kind} {tail}")
         return {

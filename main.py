@@ -306,7 +306,7 @@ class BangumiNexusPlugin(Star):
         """按配置决定要不要开独立 Webhook 端口。
 
         端口为 0（默认）时连对象都不建 —— 绝大多数人只用 Dashboard 同源通道，
-        没必要凭空多一个监听 socket。「token_required」 取「令牌为空」，
+        没必要凭空多一个监听 socket。「token_missing」 取「令牌为空」，
         listener 在这种情况下会拒绝启动，避免开出一个谁都能 POST 的裸端点。
         """
 
@@ -318,7 +318,7 @@ class BangumiNexusPlugin(Star):
             route=conf.webhook_route,
             host=conf.webhook_bind,
             port=conf.webhook_port,
-            token_required=not conf.webhook_token,
+            token_missing=not conf.webhook_token,
             activity=self._activity,
         )
 

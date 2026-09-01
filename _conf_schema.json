@@ -213,6 +213,24 @@
     "type": "int",
     "default": 14
   },
+  "global_excludes": {
+    "description": "全局排除项（所有会话生效）",
+    "type": "list",
+    "hint": "填预设名或任意关键词，命中标题的发布一律不推。预设名：简体 / 繁体 / 简繁 / 720p / 1080p / 2160p / Baha / ABEMA / CR / B-Global / 内嵌 / 外挂 / MKV / MP4 / 合集 / 生肉。这一层是全局底线，会话里的 /sub_exclude 叠加在它之上，两边都不命中才会推送。",
+    "default": []
+  },
+  "rss_episode_dedup": {
+    "description": "同一集只推一条（合并简繁 / 画质 / 片源）",
+    "type": "bool",
+    "hint": "一个字幕组常把同一集分别从 Baha、ABEMA 压两版，再各出简体 / 繁体、1080p / 720p，一集能刷四到六条。开启后同一集只按下面的优选顺序推最合口味的那一条，其余记为已读。认不出集数的发布（剧场版、合集、公告）不受影响。",
+    "default": true
+  },
+  "rss_episode_prefer": {
+    "description": "同集优选顺序",
+    "type": "list",
+    "hint": "越靠前优先级越高，且靠前的一项压得住后面所有项。可用标记：简体 / 繁体 / 1080p / 720p / 2160p / Baha / ABEMA / CR / B-Global / 内嵌 / 外挂 / MKV / MP4。写错的标记会被忽略，全部写错则退回默认顺序。",
+    "default": ["简体", "1080p", "Baha", "MKV", "外挂"]
+  },
   "rsshub_base": {
     "description": "RSSHub 实例地址",
     "type": "string",

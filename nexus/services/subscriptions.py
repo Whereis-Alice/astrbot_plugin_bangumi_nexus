@@ -30,6 +30,7 @@ from ..constants import (
     PICK_MAX_OPTIONS,
     PICK_SESSION_SECONDS,
 )
+from ..dedup import dedupe_releases
 from ..models import MatchResult, MikanGroup, Notification, Subscription
 from ..render import build_feed_card, build_notice_card, build_picker_card, theme_keys
 from ..sources.rss import dmhy_feed, mikan_group_feed, normalize_feed_url, rsshub_feed
@@ -40,9 +41,12 @@ from .base import (
     PREF_THEME,
     Deps,
     Reply,
+    blocked_by,
     cover_uri,
+    effective_excludes,
     excludes_for,
     expand_excludes,
+    global_excludes,
     make_card,
     parse_switch,
     set_excludes,
@@ -350,7 +354,7 @@ class SubscriptionService:
         if excludes:
             head = "、".join(excludes[:6])
             tail = f" 等 {len(excludes)} 项" if len(excludes) > 6 else ""
-            lines.append(f"已套用全局排除项：{head}{tail}")
+            lines.append(f"已套用本会话排除项：{head}{tail}")
         lines.extend(notes)
         return await self._notice(
             umo,
@@ -381,9 +385,9 @@ class SubscriptionService:
     # /sub_exclude
     # ------------------------------------------------------------------
     async def excludes(self, umo: str, raw: str) -> Reply:
-        """管理会话级的全局排除项。
+        """管理「本会话排除项」。
 
-        为什么做成「全局」而不是「每条订阅各设一份」：用户想屏蔽的东西
+        为什么做成会话级而不是「每条订阅各设一份」：用户想屏蔽的东西
         （繁体、720p、合集、生肉）几乎不随番剧变化，逐条去设等于让人放弃。
         这里存一份会话清单，新订阅自动套用，「apply」 还能一次刷到已有订阅上。
         """
@@ -398,7 +402,11 @@ class SubscriptionService:
                 eyebrow="EXCLUDE PRESETS",
                 title="可用的排除预设",
                 subtitle="用 /sub_exclude add <名字> 直接勾上",
-                lines=[f"{name}｜命中：{'、'.join(items)}" for name, items in EXCLUDE_PRESETS],
+                lines=[
+                    *(f"{name}｜命中：{'、'.join(items)}" for name, items in EXCLUDE_PRESETS),
+                    "",
+                    "想让所有会话都生效？在 Dashboard 的「全局排除项」里填，这里只管本会话。",
+                ],
                 stamp="FILTER",
             )
         if action in {"add", "加", "添加", "屏蔽"}:
@@ -421,9 +429,9 @@ class SubscriptionService:
             return await self._notice(
                 umo,
                 eyebrow="EXCLUDE",
-                title=f"已把排除项刷到 {touched} 条订阅",
-                subtitle="之后新建的订阅会自动套用",
-                lines=self._exclude_lines(tuple(current)),
+                title=f"已把本会话排除项刷到 {touched} 条订阅",
+                subtitle="全局层无需回刷，每轮轮询都会现取",
+                lines=self._exclude_lines(tuple(current), global_excludes(deps)),
                 stamp="FILTER",
             )
         elif action not in {"", "list", "查看", "show"}:
@@ -432,29 +440,41 @@ class SubscriptionService:
                 "add/del 可以一次给多个词，用空格或逗号分隔。"
             )
 
+        shared = global_excludes(deps)
         return await self._notice(
             umo,
             eyebrow="EXCLUDE",
-            title="全局排除项" if current else "还没有设排除项",
-            subtitle="新建订阅时自动套用；apply 可刷到已有订阅",
-            lines=self._exclude_lines(tuple(current)),
+            title="本会话排除项" if current else "本会话还没设排除项",
+            subtitle="全局层由 Dashboard 配置，这里叠加在它之上",
+            lines=self._exclude_lines(tuple(current), shared),
             stamp="FILTER",
         )
 
     @staticmethod
-    def _exclude_lines(chosen: tuple[str, ...]) -> list[str]:
-        """把「勾了什么」和「实际过滤哪些词」分开展示。
+    def _exclude_lines(chosen: tuple[str, ...], shared: tuple[str, ...] = ()) -> list[str]:
+        """把三层来源和「实际过滤哪些词」分开展示。
 
-        分开是有意的：用户勾的是 「繁体」，真正参与过滤的是 「繁体/繁日/CHT/BIG5」，
-        只显示前者会让人以为漏了写法，只显示后者又看不懂自己勾过什么。
+        为什么要把层次写清楚：用户最常见的困惑是「我明明删掉了排除项，怎么还在过滤」——
+        因为过滤有三层（Dashboard 全局层、本会话层、单条订阅自己的 「excludes」），
+        指令只能改中间那层。不写明白就只能靠猜。
+
+        「已勾选」和「实际过滤」也分开：勾的是 「繁体」，真正参与过滤的是
+        「繁体 / 繁日 / CHT / BIG5」，只显示前者会让人以为漏了写法，
+        只显示后者又看不懂自己勾过什么。
         """
-        if not chosen:
-            return ["用 /sub_exclude add 繁体 720p 开始，或 /sub_exclude preset 看预设清单。"]
-        expanded = expand_excludes(chosen)
-        lines = [f"已勾选（{len(chosen)}）：{'、'.join(chosen)}"]
-        if len(expanded) != len(chosen):
-            lines.append(f"实际过滤（{len(expanded)}）：{'、'.join(expanded)}")
-        lines.append("命中这些词的发布会被丢掉，大小写不敏感。")
+        lines: list[str] = []
+        if shared:
+            lines.append(f"全局层（{len(shared)}，Dashboard 设）：{'、'.join(shared)}")
+        if chosen:
+            lines.append(f"本会话（{len(chosen)}）：{'、'.join(chosen)}")
+        else:
+            lines.append("本会话：还没勾，/sub_exclude add 繁体 720p 开始。")
+        merged = tuple(dict.fromkeys((*shared, *chosen)))
+        expanded = expand_excludes(merged)
+        if expanded and len(expanded) != len(merged):
+            lines.append(f"两层合并后实际过滤（{len(expanded)}）：{'、'.join(expanded)}")
+        lines.append("命中任一词的发布都会被丢掉，大小写不敏感。")
+        lines.append("预设清单：/sub_exclude preset")
         return lines
 
     # ------------------------------------------------------------------
@@ -798,7 +818,16 @@ class SubscriptionService:
             return await self._on_failure(sub, str(error)[:200])
 
         recovered = bool(sub.error)
-        matched = [item for item in items if sub.matches(item.title)]
+        # 过滤一共三层：单条订阅自带的 「excludes」（走 「sub.matches」）、
+        # 插件配置里的全局排除项、这个会话用 「/sub_exclude」 加的排除项。
+        # 后两层每轮现取而不是订阅时写死：管理员在 Dashboard 改一次就立刻对所有
+        # 老订阅生效，不用再挨个 「/sub_exclude apply」 回刷。
+        blocked = await effective_excludes(deps, sub.umo)
+        matched = [
+            item
+            for item in items
+            if sub.matches(item.title) and not blocked_by(item.title, blocked)
+        ]
         uids = [item.uid for item in matched]
         fresh_uids = set(await deps.store.filter_unseen(uids, umo=sub.umo))
         fresh = [item for item in matched if item.uid in fresh_uids]
@@ -816,11 +845,22 @@ class SubscriptionService:
         if not fresh or (first_run and conf.rss_first_poll_silent):
             return None
 
+        # 同集归并只作用于「本轮要推的新条目」。放在 「filter_unseen」 之后是有意的：
+        # 若先归并再查历史，昨天已推过的那一版会把今天新出的 v2 顶掉，结果什么也不推。
+        # 落选的版本不需要额外记账 —— 上面 「mark_seen」 已经把整批 matched 都记成已读。
+        merged = 0
+        if conf.rss_episode_dedup:
+            outcome = dedupe_releases(fresh, prefer=conf.rss_episode_prefer)
+            merged = outcome.merged
+            fresh = list(outcome.kept)
+
         limited = fresh[: max(1, conf.rss_max_items_per_poll)]
         hidden = len(fresh) - len(limited)
         lines = [item.title for item in limited]
         if hidden:
             lines.append(f"另有 {hidden} 条本轮没展示，避免刷屏")
+        if merged:
+            lines.append(f"同一集的另外 {merged} 个版本（简繁 / 画质 / 片源）已自动合并")
         cover = ""
         if sub.subject_id:
             subject = await deps.hub.bangumi.subject(sub.subject_id)
@@ -833,7 +873,12 @@ class SubscriptionService:
             lines=tuple(lines),
             link=limited[0].link,
             cover=cover,
-            payload={"feed_items": limited, "subscription": sub.name, "hidden": hidden},
+            payload={
+                "feed_items": limited,
+                "subscription": sub.name,
+                "hidden": hidden,
+                "merged": merged,
+            },
         )
         deps.activity.info("rss", f"{sub.name} 有 {len(fresh)} 条新更新")
         return await self.target_for(sub.umo), notification

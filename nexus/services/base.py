@@ -151,7 +151,7 @@ def expand_excludes(values: Iterable[str]) -> tuple[str, ...]:
 
 
 async def excludes_for(deps: Deps, umo: str) -> tuple[str, ...]:
-    """取会话级的全局排除项（用户勾选的原始名字，未展开）。
+    """取「本会话排除项」（用户勾选的原始名字，未展开）。
 
     存原始名而不是展开结果：WebUI 要能把复选框重新勾上，
     而且预设词表以后补充同义写法时，老订阅也能跟着受益。
@@ -165,8 +165,38 @@ async def excludes_for(deps: Deps, umo: str) -> tuple[str, ...]:
     return tuple(part for part in str(raw or "").split("|") if part.strip())
 
 
+def global_excludes(deps: Deps) -> tuple[str, ...]:
+    """取插件配置里的全局排除项（原始名，未展开）。
+
+    这一层跟会话层的区别：配置项由管理员在 Dashboard 里设一次，对所有会话、
+    所有订阅无条件生效 —— 「这台 bot 一律不要繁体和合集」 属于部署口味，
+    不该让每个群各自 「/sub_exclude」 一遍。会话层只能在它之上继续加严。
+    """
+    return tuple(deps.conf.global_excludes)
+
+
+async def effective_excludes(deps: Deps, umo: str) -> tuple[str, ...]:
+    """全局层 ∪ 会话层，展开成真正参与过滤的关键词。
+
+    合并放在这里而不是各调用点：过滤链一共有三层（全局 / 会话 / 单条订阅的
+    「excludes」 字段），前两层永远该一起生效，分散拼装迟早漏一处。
+    """
+    return expand_excludes((*global_excludes(deps), *(await excludes_for(deps, umo))))
+
+
+def blocked_by(title: str, words: Iterable[str]) -> str:
+    """标题是否命中排除词，命中就返回那个词（便于日志说明原因），否则空串。"""
+
+    text = (title or "").lower()
+    for word in words:
+        needle = str(word or "").strip().lower()
+        if needle and needle in text:
+            return str(word)
+    return ""
+
+
 async def set_excludes(deps: Deps, umo: str, values: Iterable[str]) -> tuple[str, ...]:
-    """写回会话级全局排除项，返回落库后的清单。"""
+    """写回「本会话排除项」，返回落库后的清单。"""
 
     chosen = tuple(dict.fromkeys(str(item or "").strip() for item in values if str(item).strip()))
     await deps.store.set_pref(umo, PREF_EXCLUDES, "|".join(chosen))

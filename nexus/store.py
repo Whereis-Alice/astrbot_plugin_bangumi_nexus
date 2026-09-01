@@ -443,7 +443,7 @@ class Store:
     async def apply_excludes(self, umo: str, excludes: Iterable[str]) -> int:
         """把一份黑名单批量刷到某会话的全部订阅上，返回受影响条数。
 
-        为什么要批量：全局排除项是「这个群不想看繁体和 720p」这种会话级口味，
+        为什么要批量：「本会话排除项」是「这个群不想看繁体和 720p」这种会话级口味，
         改了之后老订阅也该跟着生效，否则用户还得逐条重订一遍。
         """
         words = _join(tuple(excludes))

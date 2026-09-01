@@ -15,7 +15,8 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .constants import DEFAULT_USER_AGENT, MIN_RSS_INTERVAL_MINUTES
+from .constants import DEFAULT_USER_AGENT, EPISODE_PREFER_DEFAULT, MIN_RSS_INTERVAL_MINUTES
+from .dedup import normalize_prefer
 
 RENDERERS = ("auto", "html", "raster", "t2i", "text")
 SORT_KEYS = ("score", "doing", "time", "name")
@@ -182,6 +183,12 @@ class NexusConfig:
     #: 只给番名订阅时，先列出 Mikan 上的字幕组让用户回序号，而不是直接收下全部发布。
     rss_pick_source: bool = True
     rss_history_days: int = 14
+    #: 跨会话生效的排除项（预设名或自定义词）。会话级 「/sub_exclude」 会叠加在它之上。
+    global_excludes: tuple[str, ...] = ()
+    #: 同一集出现多个版本（简繁 / 画质 / 片源）时只推一条。
+    rss_episode_dedup: bool = True
+    #: 同集归并时的优选顺序，越靠前优先级越高。
+    rss_episode_prefer: tuple[str, ...] = EPISODE_PREFER_DEFAULT
     rsshub_base: str = "https://rsshub.app"
     mikan_base: str = "https://mikanani.me"
     # Webhook
@@ -226,6 +233,8 @@ class NexusConfig:
         data["push_times"] = list(self.push_times)
         data["push_targets"] = list(self.push_targets)
         data["anime1_refresh_hours"] = list(self.anime1_refresh_hours)
+        data["global_excludes"] = list(self.global_excludes)
+        data["rss_episode_prefer"] = list(self.rss_episode_prefer)
         return data
 
 
@@ -280,6 +289,12 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
         rss_first_poll_silent=_as_bool(_get(raw, "rss_first_poll_silent", True), True),
         rss_pick_source=_as_bool(_get(raw, "rss_pick_source", True), True),
         rss_history_days=_as_int(_get(raw, "rss_history_days", 14), 14, low=1, high=180),
+        global_excludes=_as_list(_get(raw, "global_excludes", ())),
+        rss_episode_dedup=_as_bool(_get(raw, "rss_episode_dedup", True), True),
+        # 优选顺序里的非法标记直接洗掉；洗空了就退回默认序，
+        # 否则「填错一个字」等于悄悄关掉归并的偏好，用户只会看到「怎么推的是繁体」。
+        rss_episode_prefer=normalize_prefer(_as_list(_get(raw, "rss_episode_prefer", ())))
+        or EPISODE_PREFER_DEFAULT,
         rsshub_base=_as_str(_get(raw, "rsshub_base", ""), "https://rsshub.app").rstrip("/"),
         mikan_base=_as_str(_get(raw, "mikan_base", ""), "https://mikanani.me").rstrip("/"),
         webhook_enabled=_as_bool(_get(raw, "webhook_enabled", False), False),

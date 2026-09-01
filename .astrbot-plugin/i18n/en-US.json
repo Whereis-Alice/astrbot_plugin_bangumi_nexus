@@ -163,6 +163,18 @@
     "rss_history_days": {
       "description": "Days to keep deduplication records"
     },
+    "global_excludes": {
+      "description": "Global exclusions",
+      "hint": "Applies to every session unconditionally, so you do not have to repeat it per group. Accepts preset names (简体 / 繁体 / 720p / Baha …, listed by «/sub_exclude preset») or any keyword; a match anywhere in the title skips that item. Per-session exclusions stack on top of this list."
+    },
+    "rss_episode_dedup": {
+      "description": "Push only one release per episode",
+      "hint": "A fansub group often posts the same episode as simplified/traditional, 1080p/720p, Baha/ABEMA variants. When on, those variants are merged down to the best match for your preference and the rest is skipped silently; a revision such as «01v2» wins over the original. Safer than excluding a source outright — excluding ABEMA means missing the episode entirely whenever Baha has no release."
+    },
+    "rss_episode_prefer": {
+      "description": "Preference order for episode merging",
+      "hint": "Earlier entries weigh more; only used when episode merging is on. Available tags: 简体 / 繁体 / 简繁 / 2160p / 1080p / 720p / Baha / ABEMA / CR / B-Global / 内嵌 / 外挂 / MKV / MP4 and so on."
+    },
     "rsshub_base": {
       "description": "RSSHub instance URL",
       "hint": "Used to expand /rsshub routes into full URLs. A self-hosted instance is more reliable."

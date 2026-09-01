@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from nexus.config import GACHA_SOURCES, RENDERERS, SORT_KEYS, load_config, parse_hours, parse_times
+from nexus.constants import EPISODE_PREFER_DEFAULT
 from nexus.render.themes import theme_keys
 
 
@@ -111,3 +112,52 @@ class TestLoadConfig:
 
         conf = load_config(raw, themes=theme_keys())
         assert conf.card_theme in theme_keys()
+
+
+class Test全局排除与同集归并:
+    """v1.1.5 新增的三项：全局排除项 / 同集归并开关 / 归并优选顺序。"""
+
+    def test_默认值(self) -> None:
+        conf = load_config({}, themes=theme_keys())
+        assert conf.global_excludes == ()
+        assert conf.rss_episode_dedup is True
+        assert conf.rss_episode_prefer == EPISODE_PREFER_DEFAULT
+
+    def test_全局排除项接受字符串与数组(self) -> None:
+        """面板的 list 类型有时回传字符串（用户在文本框里手打逗号），都要吃下。"""
+
+        assert load_config(
+            {"global_excludes": ["简体", " 720p "]}, themes=theme_keys()
+        ).global_excludes == (
+            "简体",
+            "720p",
+        )
+        assert load_config(
+            {"global_excludes": "简体, 720p"}, themes=theme_keys()
+        ).global_excludes == (
+            "简体",
+            "720p",
+        )
+
+    def test_优选顺序里的非法标记被丢掉(self) -> None:
+        conf = load_config({"rss_episode_prefer": ["baha", "不存在", "1080P"]}, themes=theme_keys())
+        assert conf.rss_episode_prefer == ("Baha", "1080p")
+
+    def test_优选顺序全非法时回落默认(self) -> None:
+        """留空或全填错等于「没表态」，此时必须回落到默认序，否则归并会退化成
+        「谁新留谁」，用户会莫名收到繁体版。"""
+
+        conf = load_config({"rss_episode_prefer": ["???"]}, themes=theme_keys())
+        assert conf.rss_episode_prefer == EPISODE_PREFER_DEFAULT
+
+    def test_归并开关可关(self) -> None:
+        conf = load_config({"rss_episode_dedup": False}, themes=theme_keys())
+        assert conf.rss_episode_dedup is False
+
+    def test_新字段进得了payload(self) -> None:
+        """payload 是 WebUI 配置页的数据源，漏一项面板上就是空白。"""
+
+        payload = load_config({"global_excludes": ["简体"]}, themes=theme_keys()).payload()
+        assert payload["global_excludes"] == ["简体"]
+        assert payload["rss_episode_prefer"] == list(EPISODE_PREFER_DEFAULT)
+        assert payload["rss_episode_dedup"] is True

@@ -163,6 +163,18 @@
     "rss_history_days": {
       "description": "推送去重记录保留天数"
     },
+    "global_excludes": {
+      "description": "全局排除项",
+      "hint": "所有会话无条件生效，写在这里就不用每个群再设一遍。可以填预设名（简体 / 繁体 / 720p / Baha …，清单见「/sub_exclude preset」）或任意关键词，命中标题任意位置就跳过那一条。会话级排除项叠加在它之上。"
+    },
+    "rss_episode_dedup": {
+      "description": "同一集只推一个版本",
+      "hint": "同一个字幕组常把简体 / 繁体、1080p / 720p、Baha / ABEMA 各发一遍。开启后同一集的多个版本会归并成最合口味的那一条，其余静默跳过；修订版（如 01v2）优先于原版。比直接排除片源更稳 —— 排除 ABEMA 会导致 Baha 没出片时整集收不到。"
+    },
+    "rss_episode_prefer": {
+      "description": "同集归并的优先顺序",
+      "hint": "越靠前权重越高，只在「同一集只推一个版本」开启时生效。可用标记：简体 / 繁体 / 简繁 / 2160p / 1080p / 720p / Baha / ABEMA / CR / B-Global / 内嵌 / 外挂 / MKV / MP4 等。"
+    },
     "rsshub_base": {
       "description": "RSSHub 实例地址",
       "hint": "用于把 /rsshub 路由补全成完整地址。自建实例更稳定。"

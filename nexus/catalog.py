@@ -208,7 +208,7 @@ SUBSCRIBE = Category(
         Command(
             "sub_exclude",
             "sub_exclude [list|add <词>|del <词>|clear|preset|apply]",
-            "全局排除项：命中的发布直接丢掉。新订阅自动套用，apply 可刷到已有订阅。",
+            "本会话排除项：命中的发布直接丢掉。新订阅自动套用，apply 可刷到已有订阅。",
             aliases=("排除词",),
         ),
         Command(

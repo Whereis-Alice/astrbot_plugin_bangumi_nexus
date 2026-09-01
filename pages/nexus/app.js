@@ -661,10 +661,13 @@ async function loadSubs() {
 }
 
 /**
- * 全局排除项：可勾的预设清单 + 这个会话已经勾上的。
+ * 排除项：可勾的预设清单 + 这个会话已经勾上的 + 只读的全局层。
  *
  * 后端存的是**预设名**而不是展开后的关键词，所以回显时要把「不在预设表里的」
  * 归到自定义输入框 —— 否则用户自己加的词会在界面上凭空消失。
+ *
+ * 全局层（配置页设、所有会话都吃）在这里只读展示：面板改不了它，但过滤结果
+ * 是两层叠加的，不显示出来用户会把「我没勾却被过滤了」当成 bug。
  */
 async function loadExcludes() {
   const payload = await apiGet("excludes", { umo: state.umo || "" });
@@ -675,6 +678,9 @@ async function loadExcludes() {
     presets,
     picked: chosen.filter((name) => names.has(name)),
     custom: chosen.filter((name) => !names.has(name)).join(" "),
+    shared: Array.isArray(payload?.global) ? payload.global.map(String) : [],
+    dedup: payload?.episode_dedup !== false,
+    prefer: Array.isArray(payload?.episode_prefer) ? payload.episode_prefer.map(String) : [],
     saved: "",
   };
   excludeDraft.saved = JSON.stringify(excludeValues());
@@ -1379,11 +1385,11 @@ function excludeValues() {
  * 展开规则与后端 「expand_excludes」 一致，而预设词表本身也是后端下发的，
  * 所以勾一下就能立刻看到效果，不必为一个预览再跑一趟接口。
  */
-function excludeExpanded() {
+function excludeExpand(names) {
   const table = new Map(excludeDraft.presets.map((row) => [row.name, row.words || []]));
   const seen = new Set();
   const words = [];
-  for (const name of excludeValues()) {
+  for (const name of names) {
     for (const raw of table.get(name) || [name]) {
       const word = String(raw).trim();
       const key = word.toLowerCase();
@@ -1394,6 +1400,12 @@ function excludeExpanded() {
   }
   return words;
 }
+
+/** 本会话勾选展开后的词。 */
+const excludeExpanded = () => excludeExpand(excludeValues());
+
+/** 两层合并后真正拿去比对的词，与后端 「effective_excludes」 一致。 */
+const excludeEffective = () => excludeExpand([...(excludeDraft.shared || []), ...excludeValues()]);
 
 const excludeDirty = () => JSON.stringify(excludeValues()) !== excludeDraft.saved;
 
@@ -1432,15 +1444,18 @@ function sourcesPanel() {
   });
 }
 
-/** 全局排除项面板。预设表拉不到（接口失败）时整块隐藏，避免只剩一个空框。 */
+/** 排除项面板（全局层只读 + 本会话层可改）。预设表拉不到（接口失败）时整块隐藏，避免只剩一个空框。 */
 function excludePanel() {
   if (!excludeDraft.presets.length) return "";
-  const expanded = excludeExpanded();
+  const shared = excludeDraft.shared || [];
+  const sharedWords = excludeExpand(shared);
+  const effective = excludeEffective();
   const dirty = excludeDirty();
+  const prefer = excludeDraft.prefer || [];
   return panel({
     eyebrow: "filter",
-    title: "全局排除项",
-    desc: "勾上的词会自动加到这个会话「之后新增」的订阅上。同一个字幕组常把简繁、多种画质各发一遍，排掉多余的写法就不会重复推送。",
+    title: "排除项",
+    desc: "过滤分三层：配置页的全局排除项（所有会话都吃）→ 这里的本会话排除项 → 每条订阅自己的关键词。同一集的简繁 / 画质 / 片源多版本还会被「同集归并」再收一次口。",
     actions:
       btn(dirty ? "保存改动" : "保存", {
         act: "exclude-save",
@@ -1452,9 +1467,18 @@ function excludePanel() {
         act: "exclude-apply",
         glyph: "refresh",
         sm: true,
-        title: "把这份清单覆盖到该会话现有的每条订阅上",
+        title: "把本会话这份清单覆盖到该会话现有的每条订阅上（全局层不用回写）",
       }),
     body:
+      `<div class="field">` +
+      `<span class="field-label">全局层（只读）</span>` +
+      (shared.length
+        ? `<div class="chips">${shared.map((name) => chip(name, "mono")).join("")}</div>` +
+          `<span class="field-hint">展开成 ${num(sharedWords.length)} 个词，所有会话无条件生效。改它请去「配置 → RSS 与推送 → 全局排除项」。</span>`
+        : note("还没设全局排除项。想让所有会话都少收几种版本，去「配置 → RSS 与推送 → 全局排除项」填一次就够。")) +
+      `</div>` +
+      `<div class="field" style="margin-top:var(--gap)">` +
+      `<span class="field-label">本会话排除项</span>` +
       `<div class="chips">` +
       excludeDraft.presets
         .map((row) =>
@@ -1465,16 +1489,23 @@ function excludePanel() {
         )
         .join("") +
       `</div>` +
+      `</div>` +
       `<div class="field" style="margin-top:var(--gap)">` +
       `<span class="field-label">自定义排除词</span>` +
       `<input type="text" placeholder="逗号或空格分隔，例如：内嵌 修复 v2" value="${attr(excludeDraft.custom)}" data-live="exclude-custom" data-enter="exclude-save" />` +
       `<span class="field-hint">大小写不敏感，命中标题任意位置就跳过那一条。改完记得按回车或点「保存」。</span>` +
       `</div>` +
-      (expanded.length
-        ? `<div class="chips" style="margin-top:var(--gap)">${expanded.map((word) => chip(word, "mono")).join("")}</div>`
+      (effective.length
+        ? `<div class="field" style="margin-top:var(--gap)"><span class="field-label">两层合并后实际过滤</span><div class="chips">${effective.map((word) => chip(word, "mono")).join("")}</div></div>`
         : note("现在没有任何排除项，抓到的条目会原样推送。")),
     foot:
-      badge("勾选 " + num(excludeValues().length) + " 项 → 实际过滤 " + num(expanded.length) + " 个词") +
+      badge("全局 " + num(shared.length) + " · 本会话 " + num(excludeValues().length) + " → 实际过滤 " + num(effective.length) + " 个词") +
+      badge(
+        excludeDraft.dedup
+          ? "同集归并：开" + (prefer.length ? "（优先 " + prefer.join(" > ") + "）" : "")
+          : "同集归并：关",
+        excludeDraft.dedup ? "ok" : "warn",
+      ) +
       (dirty ? badge("有未保存的改动", "warn") : ""),
   });
 }
@@ -1571,9 +1602,9 @@ let pushWeekday = 0;
 // 同样不进 state —— 重新进面板时应该是干净的，而不是弹出上次的半截列表。
 let subSources = { name: "", items: [] };
 
-// 全局排除项草稿。预设勾选与自定义词分开存（界面上一个是开关、一个是输入框），
+// 本会话排除项草稿。预设勾选与自定义词分开存（界面上一个是开关、一个是输入框），
 // 「saved」 是落库那一刻的签名，用来判断有没有未保存的改动。
-let excludeDraft = { presets: [], picked: [], custom: "", saved: "" };
+let excludeDraft = { presets: [], picked: [], custom: "", shared: [], dedup: true, prefer: [], saved: "" };
 
 const WEEKDAY_OPTIONS = [
   ["0", "按今天"],
@@ -2182,7 +2213,7 @@ async function subOp(op, extra = {}, ok = "") {
 }
 
 /**
- * 保存全局排除项。
+ * 保存本会话排除项。
  *
  * 「apply」 为真时才回写到已有订阅 —— 那是一次批量覆盖（每条订阅原有的排除词
  * 会被整份替换），必须由用户显式点那个按钮，不能顺手跟普通保存一起发生。
@@ -2199,7 +2230,7 @@ async function saveExcludes(apply) {
     await loadSubs();
     toast("已回写到 " + num(result?.applied || 0) + " 条订阅", "ok");
   } else {
-    toast("排除项已保存，之后新增的订阅会自动带上", "ok");
+    toast("本会话排除项已保存，之后新增的订阅会自动带上", "ok");
   }
   render("subs");
 }
@@ -2523,7 +2554,7 @@ const ACTIONS = {
     }
   },
 
-  /* — 订阅：全局排除项 — */
+  /* — 订阅：排除项 — */
   "exclude-toggle": (arg, node) => {
     const name = String(arg || "");
     const picked = excludeDraft.picked.filter((item) => item !== name);

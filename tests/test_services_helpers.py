@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import Any, cast
+
 import pytest
 
 from nexus.services import base
@@ -115,3 +118,65 @@ class TestSplitTarget:
             name, feed = split_target(f"番名 {prefix}x")
             assert name == "番名"
             assert feed == f"{prefix}x"
+
+
+class Test两层排除项:
+    """全局层（配置）与会话层（偏好）必须一起生效，且只在过滤时合并。"""
+
+    def _deps(self, *, global_words: tuple[str, ...], session: str = "") -> object:
+        """拼一个只够跑排除项路径的假 deps。
+
+        真 「Deps」 字段很多且要 「Store」，而这条路径只读两处：
+        「conf.global_excludes」 与 「store.get_pref」，用假对象才能一眼看出
+        到底读了哪一层。
+        """
+
+        class _Store:
+            async def get_pref(self, umo: str, key: str) -> str:
+                return session
+
+        return SimpleNamespace(
+            conf=SimpleNamespace(global_excludes=global_words),
+            store=_Store(),
+        )
+
+    def test_全局层原样返回未展开(self) -> None:
+        """存原始名才能在面板上重新勾上复选框，展开是过滤时才做的事。"""
+
+        deps = self._deps(global_words=("繁体", "合集"))
+        assert base.global_excludes(cast(Any, deps)) == ("繁体", "合集")
+
+    async def test_两层合并后展开(self) -> None:
+        deps = self._deps(global_words=("繁体",), session="720p|我方自定义")
+        words = await base.effective_excludes(cast(Any, deps), "umo-a")
+
+        assert "CHT" in words
+        assert "1280x720" in words
+        assert "我方自定义" in words
+
+    async def test_只有全局层时也生效(self) -> None:
+        """换个新群、什么都没设，全局层照样要过滤 —— 这是这一层存在的理由。"""
+
+        deps = self._deps(global_words=("合集",))
+        words = await base.effective_excludes(cast(Any, deps), "umo-new")
+        assert words
+
+    async def test_两层都空就不过滤(self) -> None:
+        deps = self._deps(global_words=())
+        assert await base.effective_excludes(cast(Any, deps), "umo-a") == ()
+
+    def test_命中时返回那个词(self) -> None:
+        """返回词本身而不是 True，是为了让日志能写清「因为哪个词跳过的」。"""
+
+        assert base.blocked_by("[Group][Show][01][1080p][CHT]", ("CHT", "合集")) == "CHT"
+
+    def test_大小写不敏感(self) -> None:
+        assert base.blocked_by("[Group][Show][01][1080P]", ("1080p",)) == "1080p"
+
+    def test_没命中返回空串(self) -> None:
+        assert base.blocked_by("[Group][Show][01][1080p][CHS]", ("CHT",)) == ""
+
+    def test_空词表不误伤(self) -> None:
+        """排除词里混进空字符串时，「'' in text」 恒真会把所有条目吃掉。"""
+
+        assert base.blocked_by("[Group][Show][01]", ("", "   ")) == ""

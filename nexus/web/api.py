@@ -68,6 +68,7 @@ from ..services.base import (
     Deps,
     excludes_for,
     expand_excludes,
+    global_excludes,
     make_card,
     set_excludes,
 )
@@ -199,6 +200,9 @@ CONF_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "rss_max_items_per_poll",
             "rss_first_poll_silent",
             "rss_history_days",
+            "global_excludes",
+            "rss_episode_dedup",
+            "rss_episode_prefer",
             "rsshub_base",
             "mikan_base",
         ),
@@ -639,14 +643,24 @@ class NexusService:
         }
 
     async def excludes(self, umo: str = "") -> dict[str, Any]:
-        """全局排除项：可勾的预设清单 + 当前会话已勾的 + 展开后的实际过滤词。"""
+        """排除项全景：预设清单 + 全局层 + 本会话已勾 + 合并展开后的实际过滤词。
 
-        chosen = await excludes_for(self._deps, umo) if umo else ()
+        为什么要把 「global」 一起回给前端：面板只能改会话层，但用户看到的过滤结果
+        是两层叠加的。不把全局层显示出来，用户会以为「我没勾却被过滤了」是 bug。
+        同时带上同集归并的当前设置，省得再单独发一次配置请求。
+        """
+        deps = self._deps
+        conf = deps.conf
+        chosen = await excludes_for(deps, umo) if umo else ()
+        shared = global_excludes(deps)
         return {
             "umo": umo,
             "presets": [{"name": name, "words": list(words)} for name, words in EXCLUDE_PRESETS],
             "chosen": list(chosen),
-            "expanded": list(expand_excludes(chosen)),
+            "global": list(shared),
+            "expanded": list(expand_excludes((*shared, *chosen))),
+            "episode_dedup": bool(conf.rss_episode_dedup),
+            "episode_prefer": list(conf.rss_episode_prefer),
         }
 
     async def save_excludes(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -662,6 +676,8 @@ class NexusService:
         if not isinstance(raw, Sequence) or isinstance(raw, str | bytes):
             raise NexusWebError("排除项要给一个数组")
         chosen = await set_excludes(self._deps, umo, [str(item) for item in raw])
+        # 只展开会话层：全局层每轮轮询都会现取，写进订阅记录反而会让
+        # 以后改全局配置时留下一堆刷不掉的历史残留。
         expanded = expand_excludes(chosen)
         applied = 0
         if bool(payload.get("apply")):
@@ -1293,8 +1309,8 @@ class NexusWebApi:
             (prefix + "/subs", self.get_subs, ["GET"], label + "订阅列表"),
             (prefix + "/subs", self.post_subs, ["POST"], label + "订阅操作"),
             (prefix + "/subs/sources", self.get_sub_sources, ["GET"], label + "列出可选字幕组"),
-            (prefix + "/excludes", self.get_excludes, ["GET"], label + "读取全局排除项"),
-            (prefix + "/excludes", self.post_excludes, ["POST"], label + "保存全局排除项"),
+            (prefix + "/excludes", self.get_excludes, ["GET"], label + "读取排除项设置"),
+            (prefix + "/excludes", self.post_excludes, ["POST"], label + "保存本会话排除项"),
             (prefix + "/sessions", self.get_sessions, ["GET"], label + "已知会话"),
             (prefix + "/targets", self.get_targets, ["GET"], label + "播报目标"),
             (prefix + "/targets", self.post_targets, ["POST"], label + "保存播报目标"),

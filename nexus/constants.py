@@ -164,6 +164,7 @@ RELEASE_TAG_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 EXCLUDE_PRESETS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("简体", ("简体", "简日", "CHS", "GB")),
     ("繁体", ("繁体", "繁日", "CHT", "BIG5")),
+    ("简繁", ("简繁", "繁简", "CHS&CHT", "CHT&CHS", "GB&BIG5", "BIG5&GB")),
     ("720p", ("720p", "1280x720")),
     ("1080p", ("1080p", "1920x1080")),
     ("2160p", ("2160p", "3840x2160")),
@@ -171,12 +172,25 @@ EXCLUDE_PRESETS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ABEMA", ("ABEMA",)),
     ("CR", ("Crunchyroll", "CR ")),
     ("B-Global", ("B-Global", "Bilibili")),
+    ("内嵌", ("内嵌", "hardsub")),
+    ("外挂", ("外挂", "内封", "softsub")),
+    ("MKV", ("MKV",)),
+    ("MP4", ("MP4",)),
     ("合集", ("合集", "Batch", "BDRip", "BDrip")),
     ("生肉", ("生肉", "无字幕", "Raw")),
-    ("MP4", ("MP4",)),
 )
 
 EXCLUDE_PRESET_BY_NAME = dict(EXCLUDE_PRESETS)
+
+#: 同一集出现多个版本时的默认优选顺序（靠前的优先留下）。
+#: 为什么需要：一个字幕组常把同一集分别从 Baha、ABEMA 压两版，再各出简体/繁体、
+#: 1080p/720p —— 一集能刷出四到六条。靠排除项硬屏蔽 「ABEMA」 是个坏解法：
+#: 那天 Baha 没出片就整集收不到。所以改成「都收下，但只推最合口味的那一条」。
+#: 名字取自 「RELEASE_TAG_RULES」 的展示标记，没写进来的标记权重为 0。
+EPISODE_PREFER_DEFAULT: tuple[str, ...] = ("简体", "1080p", "Baha", "MKV", "外挂")
+
+#: 可用于优选顺序的合法标记，即 「RELEASE_TAG_RULES」 的全部展示名。
+EPISODE_PREFER_CHOICES: tuple[str, ...] = tuple(label for label, _ in RELEASE_TAG_RULES)
 
 # --- TLS 宽松名单 -----------------------------------------------------------
 

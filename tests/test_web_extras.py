@@ -5,7 +5,9 @@
 * 面板与指令必须看到**同一份**候选清单，否则用户在面板点的字幕组
   和聊天里回的序号会指向不同源；
 * 「排除项」写库存的是**预设名**而不是展开词，回显要能重新勾上复选框；
-* 「回写到已有订阅」是批量覆盖，默认必须关，只有显式 「apply」 才动老订阅。
+* 「回写到已有订阅」是批量覆盖，默认必须关，只有显式 「apply」 才动老订阅；
+* 全局层（插件配置里设的）必须一起回给前端 —— 面板改不了它，但过滤结果是
+  两层叠加的，不显示出来用户会把「我没勾却被过滤了」当成 bug。
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from typing import Any, cast
 
 import pytest
 
+from nexus.constants import EPISODE_PREFER_DEFAULT
 from nexus.services.base import PREF_EXCLUDES
 from nexus.services.picker import PickOption
 from nexus.web.api import NexusService, NexusWebError
@@ -54,7 +57,11 @@ class _FakeSubs:
         return self.options
 
 
-def _service(options: tuple[PickOption, ...] = ()) -> tuple[NexusService, _FakeStore, _FakeSubs]:
+def _service(
+    options: tuple[PickOption, ...] = (),
+    *,
+    global_excludes: tuple[str, ...] = (),
+) -> tuple[NexusService, _FakeStore, _FakeSubs]:
     """拼一个只够跑这三个接口的 「NexusService」。
 
     「Deps」 / 「Wiring」 都是字段很多的 dataclass，这里用 「SimpleNamespace」
@@ -63,7 +70,16 @@ def _service(options: tuple[PickOption, ...] = ()) -> tuple[NexusService, _FakeS
     """
     store = _FakeStore()
     subs = _FakeSubs(options)
-    deps = SimpleNamespace(store=store, activity=SimpleNamespace(info=lambda *a, **k: None))
+    conf = SimpleNamespace(
+        global_excludes=global_excludes,
+        rss_episode_dedup=True,
+        rss_episode_prefer=EPISODE_PREFER_DEFAULT,
+    )
+    deps = SimpleNamespace(
+        store=store,
+        conf=conf,
+        activity=SimpleNamespace(info=lambda *a, **k: None),
+    )
     wiring = SimpleNamespace(subs=subs)
     return NexusService(cast(Any, deps), cast(Any, wiring)), store, subs
 
@@ -120,6 +136,7 @@ class TestExcludes:
 
         assert payload["chosen"] == []
         assert payload["expanded"] == []
+        assert payload["global"] == []
         names = [preset["name"] for preset in payload["presets"]]
         assert "繁体" in names
         assert all(preset["words"] for preset in payload["presets"])
@@ -169,3 +186,37 @@ class TestSaveExcludes:
             await service.save_excludes({"values": []})
         with pytest.raises(NexusWebError):
             await service.save_excludes({"umo": "umo-a", "values": "繁体"})
+
+
+class Test全局层与同集归并回显:
+    """面板要能说清「这条为什么被过滤」和「同一集为什么只来了一条」。"""
+
+    async def test_全局层原样回显且并进展开结果(self) -> None:
+        service, store, _subs = _service(global_excludes=("合集",))
+        store.prefs[("umo-a", PREF_EXCLUDES)] = "繁体"
+        payload = await service.excludes("umo-a")
+
+        assert payload["global"] == ["合集"]
+        assert payload["chosen"] == ["繁体"]
+        # 展开结果是两层的并集：只展开会话层，用户就看不出全局层在起作用。
+        assert "CHT" in payload["expanded"]
+        assert "BATCH" in [word.upper() for word in payload["expanded"]]
+
+    async def test_带上同集归并的当前设置(self) -> None:
+        """省一次单独的配置请求，也让「开没开」在排除项面板上一眼可见。"""
+
+        service, _store, _subs = _service()
+        payload = await service.excludes("")
+
+        assert payload["episode_dedup"] is True
+        assert payload["episode_prefer"] == list(EPISODE_PREFER_DEFAULT)
+
+    async def test_回写不带全局层(self) -> None:
+        """全局层每轮轮询现取，写进订阅记录只会留下改配置也刷不掉的残留。"""
+
+        service, store, _subs = _service(global_excludes=("合集",))
+        await service.save_excludes({"umo": "umo-a", "values": ["720p"], "apply": True})
+
+        applied = store.applied[0][1]
+        assert "1280x720" in applied
+        assert not [word for word in applied if "batch" in word.lower()]

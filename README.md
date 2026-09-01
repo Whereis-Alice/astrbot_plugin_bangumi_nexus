@@ -255,7 +255,7 @@ AstrBot 会自动读取 `requirements.txt` 安装：
 
 ## 配置项
 
-共 71 项，全部可以在 Dashboard 的插件配置页或本插件自带的管理页里改。**开箱默认值就能用，下面这些都是可选的调整。**
+共 72 项，全部可以在 Dashboard 的插件配置页或本插件自带的管理页里改。**开箱默认值就能用，下面这些都是可选的调整。**
 
 <details>
 <summary>管理页里的配置视图长这样（点开看全图）</summary>
@@ -343,13 +343,14 @@ AstrBot 会自动读取 `requirements.txt` 安装：
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `webhook_enabled` | bool | 关 | 启用 AutoBangumi Webhook 接收。开启后暴露一个 HTTP 接口，AutoBangumi 等下载器可以把「新集下载完成」等事件推过来。 |
+| `webhook_enabled` | bool | 关 | 启用下载器 Webhook 接收。开启后暴露一个 HTTP 接口，ani-rss、AutoBangumi 等下载器可以把「开始下载 / 下载完成 / 缺集 / 订阅完结」等事件推过来。ani-rss 的中文动作名与 emoji 都能识别。 |
 | `webhook_path` | string | `bangumi_nexus/notify` | Webhook 路径。完整地址是 http(s)://<你的AstrBot>/api/<这里的路径>。 |
 | `webhook_token` | string | （空） | Webhook 校验令牌。留空表示不校验（不推荐）。填写后请求必须带 X-Webhook-Token 头且完全一致。 |
 | `webhook_notify_watchers` | bool | 开 | 只推给追番表里有这部番的会话。开启后，除固定推送目标外，追番表里收录了该番剧的会话也会收到通知；一台下载器服务多个群时可避免互相刷屏。 |
 | `webhook_auto_progress` | bool | 关 | 新集入库时自动推进追番进度。收到「下载完成 / 整理入库」事件时，把追番表里对应番剧的进度推到该集。只会往前推，不会回退。 |
 | `webhook_port` | int | `0` | Webhook 独立监听端口。0 表示不开启（此时只走 AstrBot 面板的 /api/plug/ 路由，需要面板登录态）。填 1-65535 会额外起一个只处理 Webhook 的极简 HTTP 服务，供 AutoBangumi 直连；开启时必须同时填写 Webhook Token，否则拒绝启动。 |
-| `webhook_bind` | string | `0.0.0.0` | Webhook 监听地址。独立监听端口绑定的网卡。与下载器同机时建议改成 127.0.0.1，仅本机可访问。 |
+| `webhook_bind` | string | `0.0.0.0` | Webhook 监听地址。独立监听端口绑定的网卡。与下载器同机时建议改成 127.0.0.1，仅本机可访问；套了 Nginx 反代也应该改成 127.0.0.1。 |
+| `webhook_silent_kinds` | list | 空 | **静默事件**：列在这里的事件照常回填追番进度，但不发卡片。ani-rss 同时勾了「开始下载」和「下载完成」时，把「下载完成」填进来就不会一集刷两条。可填中文动作名（`开始下载` / `下载完成` / `缺少集数` / `订阅完结` / `摸鱼检测`）或内部标识（`download_start` / `download_complete` / `rename_complete`）。 |
 | `dedup_window_seconds` | int | `300` | 通知去重时间窗（秒）。同一条通知在窗口内重复到达只发一次。 |
 
 #### ani-rss 同步
@@ -409,7 +410,7 @@ AstrBot 会自动读取 `requirements.txt` 安装：
 | 视图 | 你能在这里做什么 |
 | --- | --- |
 | **概览** | 运行状态一屏看完：数据源统计、HTTP 缓存命中率、调度器下次执行时间、推送成功/失败计数、活动日志（可按级别过滤）；还有「刷新 anime1」「立即播报」「立即抓取 RSS」「Webhook 自测」几个一键操作 |
-| **配置** | 71 项配置按 11 组编辑，开关/滑块/下拉/多行文本各按类型给控件，带说明与默认值提示。密钥类字段只显示「已配置」不回显 |
+| **配置** | 72 项配置按 11 组编辑，开关/滑块/下拉/多行文本各按类型给控件，带说明与默认值提示。密钥类字段只显示「已配置」不回显 |
 | **追番** | 选一个会话，改进度、改状态、打分、写备注、删条目；也能直接在这里搜名字加进追番表 |
 | **订阅** | 增删订阅、单条测试抓取、批量启停、导出 JSON / 粘贴导入；还能**只填番名点「列字幕组」**从 Mikan 候选里挑一个订上，以及勾选**本会话排除项**并一键回写到已有订阅 |
 | **播报** | 配置推送目标、查看「自助订阅」进来的会话、按指定星期手动触发一次播报 |
@@ -424,7 +425,7 @@ AstrBot 会自动读取 `requirements.txt` 安装：
 | | |
 | :--: | :--: |
 | ![配置](assets/webui/config.webp) | ![追番](assets/webui/watch.webp) |
-| **配置** · 71 项分 11 组，控件按类型自动匹配 | **追番** · 进度 / 状态 / 评分 / 备注就地改 |
+| **配置** · 72 项分 11 组，控件按类型自动匹配 | **追番** · 进度 / 状态 / 评分 / 备注就地改 |
 | ![卡片](assets/webui/cards.webp) | ![数据源](assets/webui/sources.webp) |
 | **卡片** · 6 主题 × 4 版式真实渲染预览 | **数据源** · 8 个源逐个体检，给耗时与失败原因 |
 | ![订阅](assets/webui/subs.webp) | ![播报](assets/webui/targets.webp) |
@@ -706,34 +707,146 @@ Bot：已订阅 名侦探光之美少女（雪飘工作室）
 
 ---
 
-## Webhook 接入（AutoBangumi 等下载器）
+## Webhook 接入（ani-rss / AutoBangumi 等下载器）
 
-如果你在用 AutoBangumi / qBittorrent 之类的自动追番下载器，可以让它在「下载完成 / 整理入库」时直接通知 Bot。
+下载器最清楚「哪一集刚刚落地」。让它在下载完成时反过来敲插件一下，群里就能第一时间收到带封面的更新卡片，
+追番进度也顺手往前推 —— 插件不用轮询任何东西，延迟从「等下一轮 RSS」变成秒级。
 
-**1. 开启并设置令牌**
+**对 ani-rss 用户来说这条路最顺。** ani-rss 一般跑在自己电脑上，让公网服务器主动连回家里的 7789 端口得先打洞；
+反过来让 ani-rss 主动推出去，方向天然是对的。
 
-配置 → Webhook 接入 → 打开 `webhook_enabled`，`webhook_token` 填一个自己编的长字符串。
+### 1. 开启并设置令牌
 
-**2. 选一条通道**
+配置 → Webhook 接入：
+
+| 配置项 | 填什么 |
+| --- | --- |
+| `webhook_enabled` | 打开 |
+| `webhook_token` | 一串长随机字符串。**不要带英文冒号** —— ani-rss 的请求头是按第一个冒号切开的，值里再有冒号会被截断 |
+| `webhook_port` | 一个空闲端口，例如 `9520` |
+| `webhook_bind` | 套 Nginx 反代就填 `127.0.0.1`（推荐）；下载器直连才填 `0.0.0.0` |
+| `webhook_auto_progress` | 打开，追番进度才会自动回填 |
+
+> **安全约束：** `webhook_port > 0` 但 `webhook_token` 为空时，监听服务会**拒绝启动**并在日志里报错。
+> 这是故意的 —— 一个不校验令牌的公网端口等于让任何人往你群里发消息。
+
+### 2. 选一条通道
 
 | 通道 | 地址 | 什么时候用 |
 | --- | --- | --- |
 | 面板路由 | `http(s)://<AstrBot>/api/plug/astrbot_plugin_bangumi_nexus/notify` | 面板自测用。**这条路由受 Dashboard 登录态保护**，外部程序直连会 401 |
-| 独立端口 | `http://<AstrBot主机>:<webhook_port><webhook_path>` | **推荐给下载器用。** 把 `webhook_port` 设成一个空闲端口（如 `9520`），插件会额外起一个只处理 Webhook 的极简 HTTP 服务 |
+| 独立端口 | `http://<AstrBot主机>:<webhook_port>/<webhook_path>` | 局域网内直连。插件会额外起一个只处理 Webhook 的极简 HTTP 服务 |
+| 反代域名 | `https://<你的域名>/<webhook_path>` | **公网推送首选**，见第 4 步 |
 
-**3. 在下载器里填**
+### 3. ani-rss 里怎么填
 
-请求头带上 `X-Webhook-Token: <你设的令牌>`，body 是下载器自己的 JSON，插件会自动识别 6 种常见事件类型。
+ani-rss 设置 → 通知 → 新增一条，类型选 **WebHook**。
 
-> **安全约束：** `webhook_port > 0` 但 `webhook_token` 为空时，监听服务会**拒绝启动**并在日志里报错。
-> 这是故意的 —— 一个不校验令牌的公网端口等于让任何人往你群里发消息。
-> 与下载器同机时建议把 `webhook_bind` 改成 `127.0.0.1`。
+**请求方式**：`POST`
 
-**4. 两个加分项**
+**WebHook 地址**：第 2 步选好的那个完整地址，例如 `https://bangumi.example.com/bangumi_nexus/notify`
+
+**请求头**（每行一条 `键: 值`，值里不能再有冒号）：
+
+```
+Content-Type: application/json
+X-Webhook-Token: 你在第 1 步设的令牌
+```
+
+**消息内容（Body）**：
+
+```json
+{"event":"${action}","title":"${title}","season":"${season}","episode":"${episode}","poster_url":"${image}","url":"${bgmUrl}","subgroup":"${subgroup}","score":"${score}","message":${message}}
+```
+
+> ⚠️ `${message}` 是 ani-rss 已经转义好的整段通知文本，**外面千万不要再加引号**，加了 JSON 就坏了。
+> 其余占位符**全部要加引号** —— `${season}` / `${episode}` 展开出来是裸数字，不加引号在某些集数下同样会坏。
+
+**通知状态**（最容易漏的一步）：ani-rss 默认只勾「开始下载 / 缺少集数 / 发生错误」，
+**「下载完成」默认是没勾的** —— 不勾它，进度回填永远不会触发。建议至少勾上「开始下载」和「下载完成」，
+其余按需。
+
+填完点 ani-rss 自带的「测试」按钮，管理页「概览 → 活动日志」里应该立刻多出一条 Webhook 记录。
+
+### 4. 套上域名和 HTTPS（推荐）
+
+裸 IP 加 HTTP 传令牌是明文的，路上任何一跳都看得见。有域名的话花五分钟套一层反代，收益很大：
+
+```
+ani-rss（你家电脑）──HTTPS──▶ Nginx:443（你的域名）──▶ 127.0.0.1:9520（插件监听）
+```
+
+三个好处：令牌走加密信道；`9520` 收回内网、防火墙/安全组不用对外开；端口扫描器看不到它。
+
+Nginx 配置（Debian / Ubuntu 放 `/etc/nginx/sites-available/`，再软链到 `sites-enabled/`）：
+
+```nginx
+server {
+    listen 80;
+    server_name bangumi.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name bangumi.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/bangumi.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bangumi.example.com/privkey.pem;
+
+    # 只放行 Webhook 这一条路径
+    location = /bangumi_nexus/notify {
+        proxy_pass http://127.0.0.1:9520;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        client_max_body_size 1m;
+    }
+
+    location / { return 444; }
+}
+```
+
+证书用 certbot 一条命令签：`certbot --nginx -d bangumi.example.com`（DNS 要先解析到这台机器）。
+配好之后把 `webhook_bind` 改成 `127.0.0.1`，ani-rss 地址换成域名版。
+
+> `location =` 是精确匹配，其它路径一律 444 直接断开。这样即使域名被人扫到，对方也只能看到一个要令牌的接口。
+
+### 5. 一集别刷两条：静默事件
+
+「开始下载」和「下载完成」都勾上，一集自然会来两条。想两个事件都收、但只想看一张卡片，
+把不想看的那个填进 `webhook_silent_kinds`：
+
+```
+webhook_silent_kinds = ["下载完成"]
+```
+
+静默的事件**照常回填追番进度**、照常记进活动日志，只是不发卡片。
+反过来填 `["开始下载"]` 也行 —— 取决于你想在「开始下」还是「下完了」的那一刻收到提醒。
+
+### 6. 认得出哪些事件
+
+| ani-rss 动作 | emoji | 插件事件 | 回填进度 | 卡片语气 |
+| --- | --- | --- | --- | --- |
+| 开始下载 | 🎈 | `download_start` | — | 普通 |
+| 下载完成 | 🎉 | `download_complete` | ✅ | 普通 |
+| 缺少集数 | ⛔ | `episode_missing` | — | 警告 |
+| 发生错误 | ❌ | `download_error` | — | 警告 |
+| 订阅完结 | 🎊 | `series_completed` | — | 普通 |
+| 摸鱼检测 | 🐟 | `idle_warning` | — | 普通 |
+| 整理完成（AutoBangumi） | — | `rename_complete` | ✅ | 普通 |
+
+中文动作名、emoji、英文标识三种写法都认。万一都对不上，插件会看字段自己推断
+（有 `error` 字段当失败、带集数当新集），不会把这条请求直接丢掉。
+
+没给 `episode` 字段也没关系：ani-rss 的 `${message}` 里天然带着 `S01E05` 这种串，插件会从里面把季/集抠出来。
+封面是 ani-rss 的占位图（`null.png`）时会自动丢掉，改去 Bangumi 拿一张真海报。
+
+### 7. 两个加分项
 
 - `webhook_notify_watchers`（默认开）：除固定目标外，**追番表里收录了这部番的会话**也会收到通知。
   一台下载器服务好几个群时，各群只收自己关心的番。
-- `webhook_auto_progress`（默认关）：新集入库时自动把追番进度推到该集。只往前推，不会回退。
+- `webhook_auto_progress`（默认关，建议开）：新集入库时自动把追番进度推到该集。只往前推、不超总集数，
+  `/看到` 手动改的值不会被冲掉。
 
 ---
 
@@ -759,6 +872,10 @@ Bot：已订阅 名侦探光之美少女（雪飘工作室）
 
 两条路**落库结果完全一样**（走的是同一段代码），区别只在「这份名单从哪来」。
 先按下面三步试在线同步，连不上就翻到「离线导入」。
+
+> **名单建好之后，日常进度交给 Webhook 更省事。** 让 ani-rss 每下完一集主动推一条过来，
+> 群里当场收到卡片、追番进度立刻往前推，不必等下一次同步。
+> 配法见 [Webhook 接入](#webhook-接入ani-rss--autobangumi-等下载器)。
 
 ### 三步配好（在线同步）
 
@@ -994,7 +1111,7 @@ ani-rss 订阅列表
 astrbot_plugin_bangumi_nexus/
 ├── main.py                 指令层：42 条指令 + 4 个函数工具，只做「事件 ↔ 服务」翻译
 ├── nexus/
-│   ├── config.py           71 项配置的解析与校验
+│   ├── config.py           72 项配置的解析与校验
 │   ├── http.py             统一 HTTP 客户端：重试 / 缓存 / 并发闸门 / 统计
 │   ├── store.py            SQLite 持久层（全异步）
 │   ├── titles.py           标题归一化、季度换算、放送周期解析

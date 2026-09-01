@@ -196,8 +196,8 @@
       "hint": "Used to build per-show RSS feeds. Switch to a mirror domain if the main site is slow for you."
     },
     "webhook_enabled": {
-      "description": "Accept AutoBangumi webhooks",
-      "hint": "Exposes an HTTP endpoint so downloaders such as AutoBangumi can push events like episode-downloaded."
+      "description": "Accept downloader webhooks",
+      "hint": "Exposes an HTTP endpoint so downloaders such as ani-rss and AutoBangumi can push events like download-started, download-complete, missing-episode and season-finished. ani-rss Chinese action names and emoji are recognised too."
     },
     "webhook_path": {
       "description": "Webhook path",
@@ -222,6 +222,10 @@
     "webhook_bind": {
       "description": "Webhook bind address",
       "hint": "The interface the standalone listener binds to. Use 127.0.0.1 when the downloader runs on the same machine so nothing else can reach it."
+    },
+    "webhook_silent_kinds": {
+      "description": "Silent events (book-keeping only)",
+      "hint": "Events listed here still advance watch progress but never render a card. When ani-rss has both download-started and download-complete enabled, list download-complete here to avoid two messages per episode. Chinese action names and internal ids both work."
     },
     "dedup_window_seconds": {
       "description": "Notification deduplication window (seconds)",

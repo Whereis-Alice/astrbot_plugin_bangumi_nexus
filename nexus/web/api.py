@@ -235,6 +235,7 @@ CONF_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "webhook_bind",
             "webhook_notify_watchers",
             "webhook_auto_progress",
+            "webhook_silent_kinds",
             "dedup_window_seconds",
         ),
     ),

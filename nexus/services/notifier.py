@@ -29,12 +29,17 @@ KIND_EYEBROW = {
     "rename_complete": "RENAMED",
     "download_error": "DOWNLOAD ERROR",
     "rss_error": "RSS ERROR",
+    "episode_missing": "MISSING",
+    "series_completed": "COMPLETED",
+    "idle_warning": "STALLED",
     "rss_update": "RSS UPDATE",
     "daily_digest": "DAILY",
     "anirss_sync": "ANI-RSS SYNC",
     "test": "TEST",
 }
-ERROR_KINDS = frozenset({"download_error", "rss_error"})
+# 卡片右上角盖 「ALERT」 而不是 「NOTICE」 的事件：都是需要用户去处理的异常。
+# 「订阅完结」 是好消息、「摸鱼检测」 只是提醒，都留在 NOTICE。
+ERROR_KINDS = frozenset({"download_error", "rss_error", "episode_missing"})
 
 
 class Notifier:

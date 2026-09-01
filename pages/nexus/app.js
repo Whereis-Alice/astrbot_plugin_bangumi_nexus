@@ -169,6 +169,24 @@ function toast(message, kind = "info", ttl = 4200) {
 }
 
 /**
+ * 复制到剪贴板。
+ *
+ * 三处地方都要「复制一段可直接粘走的文本」，失败文案也一模一样，
+ * 所以收成一个函数：非 HTTPS 或没授权时 「navigator.clipboard」 会直接抛，
+ * 这时候不能静默失败 —— 得告诉用户手动全选。
+ */
+async function copyText(text, okMessage = "已复制到剪贴板") {
+  try {
+    await navigator.clipboard.writeText(String(text ?? ""));
+    toast(okMessage, "ok");
+    return true;
+  } catch {
+    toast("这个环境不允许自动复制，请手动全选上面的文本", "warn", 6000);
+    return false;
+  }
+}
+
+/**
  * 危险操作的二次确认，返回 Promise<boolean>。
  *
  * 这里必须自绘，不能用 window.confirm：AstrBot 的插件页外壳给 iframe 的 sandbox
@@ -725,8 +743,9 @@ const LOADERS = {
     state.targetsDraft = (state.targets.configured || []).join("\n");
   },
   anirss: async () => {
+    // Webhook 反推那块要看接收开关/端口/计数，这些都在概览载荷里，顺手取一次。
     await ensureSessions();
-    await loadAnirss();
+    await Promise.all([loadAnirss(), state.overview ? Promise.resolve() : loadOverview()]);
   },
   sources: async () => {
     if (!state.overview) await loadOverview();
@@ -1779,6 +1798,32 @@ const ANIRSS_FLAGS = [
 const ANIRSS_EXPORT_CMD =
   'curl -s -X POST "http://127.0.0.1:7789/api/listAni" -H "api-key: 你的APIKey" -o ani.json';
 
+// ani-rss 的 WebHook 只能把占位符拼进 body，所以这里给一份「刚够用」的模板：
+// 事件名 / 番名 / 季集 / 封面 / bgm 链接 / 字幕组 / 评分，最后带上 ani-rss 自己拼好的整段文本。
+// ⚠ 「${message}」 外面不能加引号 —— 它已经是转义好的 JSON 片段，再包一层引号整个 body 就坏了；
+//   其余占位符反而必须加引号，因为 「${season}」「${episode}」 展开出来是裸数字。
+const WEBHOOK_BODY_TPL =
+  '{"event":"${action}","title":"${title}","season":"${season}","episode":"${episode}",' +
+  '"poster_url":"${image}","url":"${bgmUrl}","subgroup":"${subgroup}","score":"${score}",' +
+  '"message":${message}}';
+
+// 请求头一行一条。ani-rss 是按第一个冒号切开的，所以令牌值里绝不能再出现冒号。
+const WEBHOOK_HEADER_TPL = "Content-Type: application/json\nX-Webhook-Token: 你设的 webhook_token";
+
+// ani-rss 默认只勾了「开始下载 / 缺少集数 / 发生错误」，「下载完成」是没勾的。
+// 不勾它，进度回填这条链路永远不会被触发 —— 最容易漏的一步，值得在界面上写死。
+const WEBHOOK_STATUS_HINT =
+  "ani-rss 的「通知状态」里务必勾上「下载完成」：它默认没勾，不勾进度回填永远不触发。";
+
+/** 当前配置能拼出哪些可用地址。域名只有用户自己知道，所以给的是带占位符的写法。 */
+function webhookEndpoints(webhook) {
+  const path = "/" + String(webhook.route || "bangumi_nexus/notify");
+  const rows = [["反代域名（推荐）", "https://你的域名" + path]];
+  const port = Number(webhook.port) || 0;
+  if (port) rows.push(["独立端口直连", "http://AstrBot主机:" + port + path]);
+  return rows;
+}
+
 /** ani-rss 里的一条订阅。「已认领」= 本地追番表里已经有它对应的那一行。 */
 function anirssRow(item, claimed) {
   const progress =
@@ -1946,6 +1991,58 @@ RENDERERS.anirss = () => {
     ),
   });
 
+  // Webhook 反推：让 ani-rss 主动把「刚下完哪一集」推过来。
+  // 放在这一页而不是单独开一屏，因为需要它的人正是「服务器连不上家里 ani-rss」的那批人 ——
+  // 他们会先走到这一页，再发现在线同步走不通。
+  const webhook = state.overview?.webhook || {};
+  const webhookPort = Number(webhook.port) || 0;
+  const webhookReady = webhook.enabled === true && webhook.token_set === true && webhookPort > 0;
+  const silentKinds = Array.isArray(webhook.silent_kinds) ? webhook.silent_kinds : [];
+  const webhookPanel = panel({
+    eyebrow: "webhook",
+    title: "Webhook 反推",
+    desc:
+      "让 ani-rss 每下完一集主动推一条过来：群里当场收到卡片、追番进度立刻往前推，" +
+      "既不用等下一次同步，也不用让服务器连回你家。",
+    actions:
+      btn("复制请求头", { act: "anirss-webhook-copy", arg: "header", glyph: "copy", kind: "ghost", sm: true }) +
+      btn("复制 Body", { act: "anirss-webhook-copy", arg: "body", glyph: "copy", kind: "ghost", sm: true }),
+    body:
+      `<div class="chips">` +
+      badge("接收开关 " + (webhook.enabled ? "已开" : "未开"), webhook.enabled ? "ok" : "warn") +
+      badge("令牌 " + (webhook.token_set ? "已设置" : "未设置"), webhook.token_set ? "ok" : "warn") +
+      badge("独立端口 " + (webhookPort || "未开"), webhookPort ? "ok" : "warn") +
+      badge("进度回填 " + (webhook.auto_progress ? "已开" : "未开"), webhook.auto_progress ? "ok" : "") +
+      `</div>` +
+      (webhookReady
+        ? ""
+        : note(
+            "接收开关 / 令牌 / 独立端口 三项齐了才能被外部直连，去「配置 · Webhook 接入」里补齐。",
+            "warn",
+          )) +
+      `<div class="field" style="margin-top:var(--gap)">` +
+      `<span class="field-label">WebHook 地址</span>` +
+      kv(webhookEndpoints(webhook)) +
+      `<span class="field-hint">公网推送请套一层 HTTPS 反代，并把 webhook_bind 改成 127.0.0.1 —— 令牌走明文很容易被路上的人捡走。</span>` +
+      `</div>` +
+      `<div class="field"><span class="field-label">请求头（一行一条）</span>` +
+      `<pre class="output">${esc(WEBHOOK_HEADER_TPL)}</pre></div>` +
+      `<div class="field"><span class="field-label">消息内容（Body）</span>` +
+      `<pre class="output">${esc(WEBHOOK_BODY_TPL)}</pre></div>` +
+      note(WEBHOOK_STATUS_HINT, "warn") +
+      (silentKinds.length
+        ? note("已静默：" + silentKinds.join("、") + " —— 这些事件只回填进度、不发卡片。")
+        : note(
+            "两个状态都勾会一集来两条。想都收但只看一张卡片，把不想看的那个填进 webhook_silent_kinds。",
+          )),
+    foot:
+      badge("收到 " + num(webhook.received || 0)) +
+      badge("已投递 " + num(webhook.delivered || 0)) +
+      badge("静默 " + num(webhook.silenced || 0)) +
+      badge("拒绝 " + num(webhook.rejected || 0)) +
+      btn("发一条测试", { act: "webhook-test", glyph: "wand", kind: "ghost", sm: true }),
+  });
+
   const scopePanel = panel({
     eyebrow: "scope",
     title: "同步范围",
@@ -2032,7 +2129,7 @@ RENDERERS.anirss = () => {
           : "还没配置 ani-rss",
       btn("刷新", { act: "reload", glyph: "refresh", sm: true, kind: "ghost" }),
     ) +
-    `<div class="deck wide">${connectionPanel}${targetsPanel}${importPanel}${scopePanel}${itemsPanel}${reportPanel}</div>`
+    `<div class="deck wide">${connectionPanel}${targetsPanel}${importPanel}${webhookPanel}${scopePanel}${itemsPanel}${reportPanel}</div>`
   );
 };
 /* --- 视图：卡片预览 ------------------------------------------------------- */
@@ -2935,14 +3032,7 @@ const ACTIONS = {
   "export-run": () => exportTo(state.umo),
   "export-all": () => exportTo(""),
 
-  "export-copy": async () => {
-    try {
-      await navigator.clipboard.writeText(exportText);
-      toast("已复制到剪贴板", "ok");
-    } catch {
-      toast("这个环境不允许自动复制，请手动全选下面的文本", "warn", 6000);
-    }
-  },
+  "export-copy": () => copyText(exportText),
 
   "import-run": async () => {
     let payload = null;
@@ -3077,14 +3167,12 @@ const ACTIONS = {
     render("anirss");
   },
 
-  "anirss-import-copy": async () => {
-    try {
-      await navigator.clipboard.writeText(ANIRSS_EXPORT_CMD);
-      toast("已复制，去那台电脑上执行", "ok");
-    } catch {
-      toast("这个环境不允许自动复制，请手动全选上面那行命令", "warn", 6000);
-    }
-  },
+  "anirss-import-copy": () => copyText(ANIRSS_EXPORT_CMD, "已复制，去那台电脑上执行"),
+
+  "anirss-webhook-copy": (arg) =>
+    arg === "header"
+      ? copyText(WEBHOOK_HEADER_TPL, "请求头已复制，粘进 ani-rss 的「请求头」")
+      : copyText(WEBHOOK_BODY_TPL, "Body 已复制，粘进 ani-rss 的「消息内容」"),
 
   "anirss-targets-save": async () => {
     const targets = String(state.anirssDraft || "")

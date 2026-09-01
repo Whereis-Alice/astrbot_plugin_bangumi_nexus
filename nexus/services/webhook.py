@@ -1,7 +1,7 @@
-"""AutoBangumi Webhook 接入。
+"""下载器 Webhook 接入。
 
-把 AutoBangumi（或任何愿意 POST 同构 JSON 的下载器）推来的事件翻译成本插件的
-「Notification」，再交给 「Notifier」 去做人格口播、卡片渲染和重试投递。
+把 AutoBangumi、ani-rss（或任何愿意 POST 同构 JSON 的下载器）推来的事件翻译成
+本插件的 「Notification」，再交给 「Notifier」 去做人格口播、卡片渲染和重试投递。
 
 相比上游 「astrbot_plugin_autobangumi_notify」，这里多做三件事：
 
@@ -9,8 +9,12 @@
    的会话 —— 一台 AutoBangumi 服务多个群时，不用再把所有番刷给所有人；
 2. **进度回填**：新集入库时顺手把追番表的进度推进到对应集数，
    于是 「/追番列表」 的进度条不用手动 「/看到」 也能跟上；
-3. **封面补全**：AutoBangumi 不给海报时，回落到 Bangumi 的条目封面，
-   卡片不会开天窗。
+3. **封面补全**：上游不给海报时，回落到 Bangumi 的条目封面，卡片不会开天窗；
+4. **中文事件名**：ani-rss 的 Webhook 模板只能给出中文动作名（「下载完成」）
+   和 emoji（「🎉」），这里一并认下来，用户直接写 「"event": "${action}"」 就行；
+5. **静默记账**：ani-rss 允许一次订阅同时推「开始下载」和「下载完成」，
+   全发卡片会一集刷两条 —— 「webhook_silent_kinds」 里列出的事件只回填进度、
+   不发卡片。
 
 Copyright (C) 2026 Whereis-Alice and AstrBot Plugin Authors.
 Licensed under the GNU Affero General Public License v3.0 or later.
@@ -19,6 +23,7 @@ Licensed under the GNU Affero General Public License v3.0 or later.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -51,6 +56,33 @@ EVENT_ALIASES: dict[str, str] = {
     "error": "download_error",
     "rss_error": "rss_error",
     "rss_failed": "rss_error",
+    # —— ani-rss（NotificationStatusEnum）——
+    # ani-rss 的 Webhook body 只能塞占位符，「${action}」 出来是中文动作名、
+    # 「${emoji}」 是对应表情。两种都收，用户就不必在 body 里手写死事件名。
+    "开始下载": "download_start",
+    "🎈": "download_start",
+    "下载完成": "download_complete",
+    "🎉": "download_complete",
+    "缺少集数": "episode_missing",
+    "缺集": "episode_missing",
+    "episode_missing": "episode_missing",
+    "missing": "episode_missing",
+    "omit": "episode_missing",
+    "⛔": "episode_missing",
+    "发生错误": "download_error",
+    "❌": "download_error",
+    "订阅完结": "series_completed",
+    "series_completed": "series_completed",
+    "subscription_completed": "series_completed",
+    "🎊": "series_completed",
+    "摸鱼检测": "idle_warning",
+    "摸鱼": "idle_warning",
+    "idle_warning": "idle_warning",
+    "procrastinating": "idle_warning",
+    "🐟": "idle_warning",
+    # —— 整理入库（ani-rss 无此状态，AutoBangumi 有）——
+    "整理完成": "rename_complete",
+    "重命名完成": "rename_complete",
 }
 
 # 事件 → 事件描述短语，用作卡片副标题。
@@ -61,6 +93,9 @@ KIND_PHRASE = {
     "rename_complete": "已整理入库",
     "download_error": "下载失败",
     "rss_error": "RSS 抓取异常",
+    "episode_missing": "缺集提醒",
+    "series_completed": "本季完结",
+    "idle_warning": "久未更新",
     "test": "连通性测试",
 }
 
@@ -69,6 +104,14 @@ PROGRESS_KINDS = frozenset({"rename_complete", "download_complete"})
 
 # 请求头里可以带 token 的几种常见写法。
 TOKEN_HEADERS = ("x-webhook-token", "x-token", "authorization")
+
+# 上游没有封面时塞的占位图。原样当封面渲染会得到一张空白，不如干脆不给，
+# 让 「_cover_for」 去 Bangumi 补一张真海报。
+PLACEHOLDER_COVERS = ("docs.wushuo.top/null.png", "/null.png")
+
+# 「S01E05」/「s1e5.5」 这类进度串。ani-rss 的 「${text}」 天然带它，
+# 于是就算用户没在 body 里单独写 episode 字段，进度回填也不会失效。
+EPISODE_PATTERN = re.compile(r"S(\d{1,2})E(\d{1,3})", re.IGNORECASE)
 
 
 class WebhookAuthError(Exception):
@@ -91,6 +134,7 @@ class WebhookService:
         self._received = 0
         self._rejected = 0
         self._delivered = 0
+        self._silenced = 0
         self._last_at = 0.0
         self._last_kind = ""
 
@@ -124,24 +168,45 @@ class WebhookService:
         self._last_kind = notification.kind
 
         targets = await self.targets_for(notification)
+        silent = notification.kind in self.silent_kinds()
         if not targets:
             deps.activity.warn("webhook", f"{notification.title} 没有匹配的推送目标")
             return {"ok": True, "kind": notification.kind, "delivered": 0, "targets": 0}
 
-        sent = await self._notifier.dispatch(notification, targets)
-        self._delivered += sent
+        sent = 0
+        if silent:
+            self._silenced += 1
+        else:
+            sent = await self._notifier.dispatch(notification, targets)
+            self._delivered += sent
+        # 进度回填与是否发卡片无关：静默事件的意义正是「只记账」。
         if notification.kind in PROGRESS_KINDS:
             await self._auto_progress(notification, targets)
-        deps.activity.info(
-            "webhook", f"{notification.title} · {notification.kind} → {sent}/{len(targets)}"
-        )
+        tail = "静默记账" if silent else f"→ {sent}/{len(targets)}"
+        deps.activity.info("webhook", f"{notification.title} · {notification.kind} {tail}")
         return {
             "ok": True,
             "kind": notification.kind,
             "title": notification.title,
             "delivered": sent,
             "targets": len(targets),
+            "silent": silent,
         }
+
+    def silent_kinds(self) -> frozenset[str]:
+        """配置里声明的「只回填进度、不发卡片」事件集合。
+
+        用户可能写内部 kind（「download_complete」）、上游中文动作名（「下载完成」）
+        甚至 emoji，统一折成内部 kind 再比对，免得因为写法不同而静默失效。
+        """
+        folded: set[str] = set()
+        for item in self._deps.conf.webhook_silent_kinds:
+            token = str(item).strip()
+            if not token:
+                continue
+            lowered = token.lower()
+            folded.add(EVENT_ALIASES.get(lowered, lowered))
+        return frozenset(folded)
 
     def _verify(self, expected: str, token: str, headers: Mapping[str, str] | None) -> None:
         """校验 token。没配 token 就不校验，但 README 会明确劝配。"""
@@ -170,9 +235,17 @@ class WebhookService:
         season = _as_int(_first(raw, "season", "season_num"))
         episode = _as_int(_first(raw, "episode", "episode_num", "ep"))
         cover = _first(raw, "poster_url", "poster", "image", "cover")
+        if cover and any(mark in cover for mark in PLACEHOLDER_COVERS):
+            cover = ""
         link = _first(raw, "url", "link", "torrent_url", "web_url")
         error = _first(raw, "error_msg", "error", "err_msg")
-        message = _first(raw, "message", "msg")
+        message = _first(raw, "message", "msg", "text")
+        if not episode:
+            # body 里没写集数字段时，从正文里的 「S01E05」 反推，
+            # 这样最小化的 ani-rss 模板也能驱动进度回填。
+            hint_season, hint_episode = parse_episode_marker(message)
+            episode = hint_episode
+            season = season or hint_season
 
         lines: list[str] = []
         marker = _episode_marker(season, episode)
@@ -184,6 +257,8 @@ class WebhookService:
             ("大小", "size"),
             ("下载器", "downloader"),
             ("媒体库", "library"),
+            ("字幕组", "subgroup"),
+            ("评分", "score"),
         ):
             value = _first(raw, key, f"{key}s")
             if value:
@@ -208,7 +283,11 @@ class WebhookService:
             subtitle=subtitle,
             link=link,
             cover=cover,
-            payload={"source": "autobangumi", "season": season, "episode": episode},
+            payload={
+                "source": _first(raw, "source", "from") or "webhook",
+                "season": season,
+                "episode": episode,
+            },
         )
 
     async def _cover_for(self, title: str) -> str:
@@ -296,11 +375,19 @@ class WebhookService:
             "received": self._received,
             "rejected": self._rejected,
             "delivered": self._delivered,
+            "silenced": self._silenced,
+            "silent_kinds": sorted(self.silent_kinds()),
             "last_at": self._last_at,
             "last_kind": self._last_kind,
             "route": self._deps.conf.webhook_route,
             "enabled": self._deps.conf.webhook_enabled,
             "token_set": bool(self._deps.conf.webhook_token),
+            # 下面四项给管理页拼「ani-rss 该怎么填」的示例用。
+            # 令牌本身绝不外传，只报「设了没有」。
+            "port": self._deps.conf.webhook_port,
+            "bind": self._deps.conf.webhook_bind,
+            "auto_progress": self._deps.conf.webhook_auto_progress,
+            "notify_watchers": self._deps.conf.webhook_notify_watchers,
         }
 
 
@@ -346,9 +433,29 @@ def _first(raw: Mapping[str, Any], *keys: str) -> str:
     return ""
 
 
+def parse_episode_marker(text: str) -> tuple[int, int]:
+    """从 「S01E05」 这类串里抠出季号与集号，抠不到返回 「(0, 0)」。"""
+    match = EPISODE_PATTERN.search(text or "")
+    if not match:
+        return 0, 0
+    return _as_int(match.group(1)), _as_int(match.group(2))
+
+
 def _as_int(value: Any) -> int:
+    """尽量把值折成整数。
+
+    ani-rss 对半集（总集篇、OVA）会给出 「5.5」，直接 「int("5.5")」 会抛
+    「ValueError」 把集数丢成 0，所以先按整数试，再退一步过 float 截断。
+    """
+    text = str(value).strip()
+    if not text:
+        return 0
     try:
-        return int(str(value).strip())
+        return int(text)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(float(text))
     except (TypeError, ValueError):
         return 0
 
@@ -369,7 +476,9 @@ def _as_mapping(raw: Any) -> Mapping[str, Any] | None:
 __all__ = [
     "EVENT_ALIASES",
     "KIND_PHRASE",
+    "PLACEHOLDER_COVERS",
     "WebhookAuthError",
     "WebhookService",
     "classify",
+    "parse_episode_marker",
 ]

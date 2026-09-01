@@ -196,8 +196,8 @@
       "hint": "用于生成单番 RSS。国内访问不畅时可改成镜像域名。"
     },
     "webhook_enabled": {
-      "description": "启用 AutoBangumi Webhook 接收",
-      "hint": "开启后暴露一个 HTTP 接口，AutoBangumi 等下载器可以把「新集下载完成」等事件推过来。"
+      "description": "启用下载器 Webhook 接收",
+      "hint": "开启后暴露一个 HTTP 接口，ani-rss、AutoBangumi 等下载器可以把「开始下载 / 下载完成 / 缺集 / 订阅完结」等事件推过来。ani-rss 的中文动作名与 emoji 都能识别。"
     },
     "webhook_path": {
       "description": "Webhook 路径",
@@ -222,6 +222,10 @@
     "webhook_bind": {
       "description": "Webhook 监听地址",
       "hint": "独立监听端口绑定的网卡。与下载器同机时建议改成 127.0.0.1，仅本机可访问。"
+    },
+    "webhook_silent_kinds": {
+      "description": "静默事件（只记账不发卡片）",
+      "hint": "列在这里的事件照常推进追番进度，但不发通知卡片。ani-rss 同时勾了「开始下载」和「下载完成」时，把「下载完成」填进来就不会一集刷两条。支持中文动作名或内部标识。"
     },
     "dedup_window_seconds": {
       "description": "通知去重时间窗（秒）",

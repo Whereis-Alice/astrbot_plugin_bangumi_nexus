@@ -227,6 +227,7 @@ class NexusConfig:
     webhook_auto_progress: bool = False
     webhook_port: int = 0
     webhook_bind: str = "0.0.0.0"
+    webhook_silent_kinds: tuple[str, ...] = ()
     dedup_window_seconds: int = 300
     # ani-rss 同步
     anirss_enabled: bool = False
@@ -274,12 +275,11 @@ class NexusConfig:
         data.pop("extras", None)
         for key in SECRET_KEYS:
             data[key] = bool(getattr(self, key, ""))
-        data["push_times"] = list(self.push_times)
-        data["push_targets"] = list(self.push_targets)
-        data["anime1_refresh_hours"] = list(self.anime1_refresh_hours)
-        data["global_excludes"] = list(self.global_excludes)
-        data["rss_episode_prefer"] = list(self.rss_episode_prefer)
-        data["anirss_sync_targets"] = list(self.anirss_sync_targets)
+        # 元组字段一律摊成列表。这里原先是逐个手写的，结果每新增一个 list 型配置
+        # 就会漏一行，WebUI 拿到 「()」 直接 JSON 序列化失败 —— 改成按类型扫。
+        for key, value in data.items():
+            if isinstance(value, tuple):
+                data[key] = list(value)
         return data
 
 
@@ -358,6 +358,7 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
         webhook_auto_progress=_as_bool(_get(raw, "webhook_auto_progress", False), False),
         webhook_port=_as_int(_get(raw, "webhook_port", 0), 0, low=0, high=65535),
         webhook_bind=_as_str(_get(raw, "webhook_bind", ""), "0.0.0.0"),
+        webhook_silent_kinds=_as_list(_get(raw, "webhook_silent_kinds", ())),
         dedup_window_seconds=_as_int(
             _get(raw, "dedup_window_seconds", 300), 300, low=0, high=86400
         ),

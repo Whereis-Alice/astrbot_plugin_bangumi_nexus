@@ -28,7 +28,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import quote
 
 from ..catalog import alias_count, category_count, command_count
@@ -236,6 +236,7 @@ CONF_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "webhook_notify_watchers",
             "webhook_auto_progress",
             "webhook_silent_kinds",
+            "webhook_targets",
             "dedup_window_seconds",
         ),
     ),
@@ -769,8 +770,21 @@ class NexusService:
         return {"items": items, "total": len(items)}
 
     # -- 推送目标 ---------------------------------------------------------
+    #
+    # 「链」（chain）指一条独立的推送通路。目前有两条：
+    #   push    —— 每日播报，收件人 = 「push_targets」 ∪ 自助订阅过播报的会话
+    #   webhook —— 下载器回调，收件人 = 「webhook_targets」（留空退回 「push_targets」）
+    #             ∪ 追番表里收录了这部番的会话
+    # 两条链共用一个界面，所以保存时必须带上链名，否则改 Webhook 目标会
+    # 顺手把播报目标一起覆盖掉。
+    CHAIN_KEYS: ClassVar[dict[str, str]] = {"push": "push_targets", "webhook": "webhook_targets"}
+
     async def targets(self) -> dict[str, Any]:
-        """播报目标全景：配置里写死的 + 会话自己订阅的 + 最终生效的并集。"""
+        """播报目标全景：配置里写死的 + 会话自己订阅的 + 最终生效的并集。
+
+        顺带回一份 Webhook 链的名单 —— 两条链的收件人经常不一样，放同一个
+        响应里前端才能一屏说清「哪条链发给谁」，不必再多跑一次请求。
+        """
 
         conf = self.conf
         configured = list(conf.push_targets)
@@ -785,14 +799,36 @@ class NexusService:
             "push_enabled": conf.push_enabled,
             "push_times": list(conf.push_times),
             "default_platform_id": conf.default_platform_id,
+            "webhook": self._webhook_targets(),
         }
 
-    async def save_targets(self, values: Sequence[Any]) -> dict[str, Any]:
+    def _webhook_targets(self) -> dict[str, Any]:
+        """Webhook 链的收件人现状。
+
+        「own」 为假表示这条链还没有自己的名单、正沿用播报目标 —— 界面要把这件事
+        说出来，否则用户以为自己填过了。
+        """
+
+        conf = self.conf
+        webhook = self._wiring.webhook
+        fixed = list(webhook.fixed_targets())
+        return {
+            "configured": list(conf.webhook_targets),
+            "resolved": list(self._wiring.notifier.resolve_targets(fixed)),
+            "own": bool(conf.webhook_targets),
+            "enabled": conf.webhook_enabled,
+            "notify_watchers": conf.webhook_notify_watchers,
+        }
+
+    async def save_targets(self, values: Sequence[Any], *, chain: str = "push") -> dict[str, Any]:
         if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
             raise NexusWebError("推送目标必须是一个列表")
+        key = self.CHAIN_KEYS.get(str(chain or "push").strip().lower())
+        if key is None:
+            raise NexusWebError("未知的推送链，只能是 push 或 webhook")
         cleaned = [str(item).strip() for item in values if str(item).strip()]
-        result = await self._write_config({"push_targets": cleaned})
-        return {"ok": True, "configured": cleaned, "applied": result}
+        result = await self._write_config({key: cleaned})
+        return {"ok": True, "chain": key, "configured": cleaned, "applied": result}
 
     # -- 手动触发 ---------------------------------------------------------
     async def push_now(self, targets: Sequence[Any] = (), weekday: int = 0) -> dict[str, Any]:
@@ -1573,7 +1609,8 @@ class NexusWebApi:
         async def run() -> Any:
             body = await _json_body()
             values = body.get("targets", [])
-            return _json(await self._service.save_targets(values))
+            chain = str(body.get("chain") or "push")
+            return _json(await self._service.save_targets(values, chain=chain))
 
         return await self._guard(run)
 

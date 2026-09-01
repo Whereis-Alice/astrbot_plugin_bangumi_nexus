@@ -794,3 +794,138 @@ class TestResponseBytes:
 
         assert listener._peer_of(cast(Any, _Broken())) == ""
         assert listener._peer_of(cast(Any, _Writer("192.0.2.5"))) == "192.0.2.5"
+
+
+class _Notifier:
+    """会记账的 「Notifier」 替身。
+
+    形状必须和真 Notifier 一致：「resolve_targets」 是同步的、「dispatch」 是 async 的。
+    写反了的话 「targets_for」 会 await 到一个 tuple —— 线上直接炸，单测却照过。
+    """
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, tuple[str, ...]]] = []
+
+    def resolve_targets(self, targets: Any) -> tuple[str, ...]:
+        return tuple(str(item).strip() for item in targets if str(item).strip())
+
+    async def dispatch(self, notification: Any, targets: Any) -> int:
+        picked = tuple(targets)
+        self.sent.append((notification.kind, picked))
+        return len(picked)
+
+
+class _Store:
+    """只提供 「list_watch」 —— 路由层唯一用到的存储接口。"""
+
+    def __init__(self, rows: tuple[tuple[str, str, str], ...] = ()) -> None:
+        self._rows = rows
+
+    async def list_watch(self, umo: str = "") -> list[Any]:
+        return [SimpleNamespace(umo=row[0], title=row[1], status=row[2]) for row in self._rows]
+
+
+GROUP_UMO = "default:GroupMessage:1091576468"
+FRIEND_UMO = "default:FriendMessage:2127074778"
+OTHER_UMO = "default:GroupMessage:1078946249"
+
+
+def _routed(
+    conf: NexusConfig,
+    *,
+    rows: tuple[tuple[str, str, str], ...] = (),
+) -> tuple[webhook.WebhookService, _Notifier]:
+    """装上记账 notifier 与追番表的服务实例，用来验证「卡片发给谁」。"""
+
+    notifier = _Notifier()
+    deps = cast(
+        Any,
+        SimpleNamespace(
+            conf=conf,
+            activity=_Activity(),
+            hub=SimpleNamespace(bangumi=_Bangumi()),
+            store=_Store(rows),
+        ),
+    )
+    return webhook.WebhookService(deps, notifier=cast(Any, notifier)), notifier
+
+
+class TestFixedTargets:
+    """Webhook 链的固定收件人：「webhook_targets」 优先，留空退回 「push_targets」。
+
+    拆成两个字段是为了让「下载通知进群、每日播报留私聊」这种常见搭配不用互相
+    牵扯；而退回规则保证老配置（根本没有这个字段）行为一字不变。
+    """
+
+    def test_专用名单优先(self) -> None:
+        service, _ = _routed(NexusConfig(webhook_targets=(GROUP_UMO,), push_targets=(FRIEND_UMO,)))
+        assert service.fixed_targets() == (GROUP_UMO,)
+
+    def test_留空退回播报名单(self) -> None:
+        service, _ = _routed(NexusConfig(push_targets=(FRIEND_UMO,)))
+        assert service.fixed_targets() == (FRIEND_UMO,)
+
+    def test_两个都空就是空(self) -> None:
+        service, _ = _routed(NexusConfig())
+        assert service.fixed_targets() == ()
+
+    def test_stats_报告名单与来源(self) -> None:
+        own, _ = _routed(NexusConfig(webhook_targets=(GROUP_UMO,), push_targets=(FRIEND_UMO,)))
+        assert own.stats()["targets"] == [GROUP_UMO]
+        assert own.stats()["targets_own"] is True
+        fallback, _ = _routed(NexusConfig(push_targets=(FRIEND_UMO,)))
+        assert fallback.stats()["targets"] == [FRIEND_UMO]
+        assert fallback.stats()["targets_own"] is False
+
+    async def test_关掉追番联动只发固定名单(self) -> None:
+        service, _ = _routed(
+            NexusConfig(
+                webhook_targets=(GROUP_UMO,),
+                push_targets=(FRIEND_UMO,),
+                webhook_notify_watchers=False,
+                enable_cross_match=False,
+            ),
+            rows=((FRIEND_UMO, "药屋少女的呢喃", "watching"),),
+        )
+        note = await service.build({"event": "下载完成", "title": "药屋少女的呢喃"})
+        assert await service.targets_for(note) == (GROUP_UMO,)
+
+    async def test_打开追番联动会并上追番会话(self) -> None:
+        service, _ = _routed(
+            NexusConfig(
+                webhook_targets=(GROUP_UMO,),
+                webhook_notify_watchers=True,
+                enable_cross_match=False,
+            ),
+            rows=(
+                (FRIEND_UMO, "药屋少女的呢喃", "watching"),
+                (OTHER_UMO, "跃动青春", "watching"),
+            ),
+        )
+        note = await service.build({"event": "下载完成", "title": "药屋少女的呢喃"})
+        assert await service.targets_for(note) == (GROUP_UMO, FRIEND_UMO)
+
+    async def test_rss_错误不打扰追番会话(self) -> None:
+        """抓取失败属于运维信息，只报给固定名单。"""
+
+        service, _ = _routed(
+            NexusConfig(
+                webhook_targets=(GROUP_UMO,),
+                webhook_notify_watchers=True,
+                enable_cross_match=False,
+            ),
+            rows=((FRIEND_UMO, "药屋少女的呢喃", "watching"),),
+        )
+        note = await service.build(
+            {"event": "rss_error", "title": "药屋少女的呢喃", "error_msg": "RSS 抓取失败"}
+        )
+        assert note.kind == "rss_error"
+        assert await service.targets_for(note) == (GROUP_UMO,)
+
+    async def test_自检发给专用名单(self) -> None:
+        service, notifier = _routed(
+            NexusConfig(webhook_targets=(GROUP_UMO,), push_targets=(FRIEND_UMO,))
+        )
+        result = await service.selftest()
+        assert result == {"ok": True, "delivered": 1, "targets": 1}
+        assert notifier.sent == [("test", (GROUP_UMO,))]

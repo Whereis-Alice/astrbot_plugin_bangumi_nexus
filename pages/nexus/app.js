@@ -77,6 +77,7 @@ const state = {
   subDraft: { value: "", name: "" },
   targets: null,
   targetsDraft: null,
+  webhookDraft: null,
   anirss: null,
   anirssDraft: null,
   anirssImportDraft: "",
@@ -741,6 +742,7 @@ const LOADERS = {
     await ensureSessions();
     state.targets = await apiGet("targets");
     state.targetsDraft = (state.targets.configured || []).join("\n");
+    state.webhookDraft = (state.targets.webhook?.configured || []).join("\n");
   },
   anirss: async () => {
     // Webhook 反推那块要看接收开关/端口/计数，这些都在概览载荷里，顺手取一次。
@@ -907,6 +909,13 @@ RENDERERS.overview = () => {
             ? listener.host + ":" + listener.port + listener.route +
               (listener.deferred ? "（慢事件转后台 " + num(listener.deferred) + " 次）" : "")
             : "未启动",
+        ],
+        [
+          "卡片发给谁",
+          (webhook.targets || []).length
+            ? (webhook.targets || []).map(shortUmo).join("、") +
+              (webhook.targets_own ? "（Webhook 专用）" : "（沿用播报目标）")
+            : "没有目标，收到也发不出去",
         ],
         ["人格转述", conf.persona_reply_enabled ? "已开启" : "已关闭"],
       ]) +
@@ -1693,6 +1702,14 @@ function umoChips(rows, empty) {
   );
 }
 
+/** 文本框里的多行会话 ID → 去空白去空行的数组。两条链共用一份解析规则。 */
+function splitTargets(text) {
+  return String(text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 RENDERERS.targets = () => {
   const data = state.targets;
   if (!data) return viewbar("播报", "正在读取播报目标…") + skeletonDeck(3);
@@ -1760,6 +1777,63 @@ RENDERERS.targets = () => {
         : ""),
   });
 
+  // Webhook 是第二条推送链，收件人经常和播报不一样（流水账进群、播报留私聊），
+  // 所以给它一个独立的名单编辑器，而不是让两者共用一份配置。
+  const webhook = data.webhook || {};
+  const webhookBase = (webhook.configured || []).join("\n");
+  const webhookDraft = state.webhookDraft ?? webhookBase;
+  const webhookDirty = webhookDraft !== webhookBase;
+
+  const webhookPanel = panel({
+    eyebrow: "webhook",
+    title: "Webhook 通知目标",
+    desc: "下载器（ani-rss / AutoBangumi）回调过来的卡片走这一条链，和每日播报各走各的。",
+    body:
+      (webhook.own
+        ? ""
+        : note("这条链还没有自己的名单，正沿用上面的固定播报目标。想让下载通知单独进某个群，在这里填上就行。", "warn")) +
+      `<div class="field">` +
+      `<textarea rows="5" placeholder="aiocqhttp:GroupMessage:123456789" data-live="webhook-targets-draft">${esc(webhookDraft)}</textarea>` +
+      `<span class="field-hint">每行一个会话 ID，格式和上面一样。留空 = 沿用播报目标，不是「谁都不发」。</span>` +
+      `</div>` +
+      `<div class="row">` +
+      btn("保存目标", { act: "webhook-targets-save", glyph: "save", kind: "primary", sm: true, disabled: !webhookDirty }) +
+      btn("放弃改动", { act: "webhook-targets-reset", glyph: "close", kind: "ghost", sm: true, disabled: !webhookDirty }) +
+      (webhookDirty ? badge("有未保存的改动", "accent") : "") +
+      `</div>` +
+      `<div class="field"><span class="field-label">固定目标（解析后）</span>` +
+      umoChips(webhook.resolved, "两份名单都是空的，Webhook 卡片将无处可发。") +
+      `</div>` +
+      kv([
+        ["接收开关", webhook.enabled ? "已开启" : "已关闭（收到也不发）"],
+        [
+          "追番表联动",
+          webhook.notify_watchers
+            ? "已开启 —— 追了这部番的会话也会收到"
+            : "已关闭 —— 只发上面这几个会话",
+        ],
+      ]) +
+      (webhook.notify_watchers
+        ? note("联动开着时，任何把这部番加进追番表的会话都会额外收到卡片。只想固定发某一处，就去「配置 · Webhook 接入」把 webhook_notify_watchers 关掉。", "warn")
+        : ""),
+    foot: state.sessions.length
+      ? `<div class="chips">` +
+        state.sessions
+          .map((row) =>
+            btn(shortUmo(row.umo), {
+              act: "webhook-targets-append",
+              arg: row.umo,
+              glyph: "plus",
+              sm: true,
+              kind: "ghost",
+              title: row.umo,
+            }),
+          )
+          .join("") +
+        `</div>`
+      : note("插件还没在任何聊天窗口里见过消息，所以暂时没有可挑的会话。"),
+  });
+
   const manualPanel = panel({
     eyebrow: "manual",
     title: "手动播报",
@@ -1780,7 +1854,7 @@ RENDERERS.targets = () => {
       num((data.effective || []).length) + " 个会话会收到每日新番",
       btn("刷新", { act: "reload", glyph: "refresh", sm: true, kind: "ghost" }),
     ) +
-    `<div class="deck wide">${configuredPanel}${effectivePanel}${manualPanel}</div>`
+    `<div class="deck wide">${configuredPanel}${effectivePanel}${webhookPanel}${manualPanel}</div>`
   );
 };
 /* --- 视图：ani-rss 同步 --------------------------------------------------- */
@@ -2038,6 +2112,13 @@ RENDERERS.anirss = () => {
       `<pre class="output">${esc(WEBHOOK_HEADER_TPL)}</pre></div>` +
       `<div class="field"><span class="field-label">消息内容（Body）</span>` +
       `<pre class="output">${esc(WEBHOOK_BODY_TPL)}</pre></div>` +
+      `<div class="field"><span class="field-label">卡片发给谁</span>` +
+      umoChips(webhook.targets, "两条链都没有目标，收到也发不出去。") +
+      `<span class="field-hint">` +
+      (webhook.targets_own
+        ? "这是 Webhook 专用名单。改它去「播报」页的「Webhook 通知目标」。"
+        : "当前沿用每日播报的目标。想让下载通知单独进某个群，去「播报」页填「Webhook 通知目标」。") +
+      `</span></div>` +
       note(WEBHOOK_STATUS_HINT, "warn") +
       (silentKinds.length
         ? note("已静默：" + silentKinds.join("、") + " —— 这些事件只回填进度、不发卡片。")
@@ -2687,14 +2768,23 @@ async function anirssWriteConfig(patch, ok = "已保存") {
   await touchOverview();
 }
 
+// 播报和 Webhook 两条链各有一个目标文本框，脏检查规则一样，所以走同一张表 ——
+// 分两个函数写，迟早会有一边忘记跟着改。
+const TARGET_CHAINS = [
+  ["targets", () => (state.targets?.configured || []).join("\n"), () => state.targetsDraft],
+  ["webhook-targets", () => (state.targets?.webhook?.configured || []).join("\n"), () => state.webhookDraft],
+];
+
 function syncTargetButtons() {
-  const baseline = (state.targets?.configured || []).join("\n");
-  const dirty = (state.targetsDraft ?? baseline) !== baseline;
   const host = $(`.view[data-view="targets"]`);
   if (!host) return;
-  ["targets-save", "targets-reset"].forEach((act) => {
-    const node = $(`[data-act="${act}"]`, host);
-    if (node) node.disabled = !dirty;
+  TARGET_CHAINS.forEach(([prefix, baseOf, draftOf]) => {
+    const baseline = baseOf();
+    const dirty = (draftOf() ?? baseline) !== baseline;
+    [prefix + "-save", prefix + "-reset"].forEach((act) => {
+      const node = $(`[data-act="${act}"]`, host);
+      if (node) node.disabled = !dirty;
+    });
   });
 }
 
@@ -3065,11 +3155,8 @@ const ACTIONS = {
   },
   /* — 播报目标 — */
   "targets-save": async () => {
-    const targets = String(state.targetsDraft || "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    await apiPost("targets", { targets });
+    const targets = splitTargets(state.targetsDraft);
+    await apiPost("targets", { targets, chain: "push" });
     toast("已保存 " + num(targets.length) + " 个固定播报目标", "ok");
     await loadView("targets", { force: true });
     await touchOverview();
@@ -3081,16 +3168,41 @@ const ACTIONS = {
   },
 
   "targets-append": (arg) => {
-    const lines = String(state.targetsDraft || "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
+    const lines = splitTargets(state.targetsDraft);
     if (lines.includes(arg)) {
       toast("这个会话已经在列表里了", "info");
       return;
     }
     lines.push(arg);
     state.targetsDraft = lines.join("\n");
+    render("targets");
+  },
+
+  /* — Webhook 目标（第二条链，「chain」 必须带上，否则会覆盖播报目标） — */
+  "webhook-targets-save": async () => {
+    const targets = splitTargets(state.webhookDraft);
+    await apiPost("targets", { targets, chain: "webhook" });
+    toast(
+      targets.length ? "Webhook 卡片将只发这 " + num(targets.length) + " 个会话" : "已清空，Webhook 改回沿用播报目标",
+      "ok",
+    );
+    await loadView("targets", { force: true });
+    await touchOverview();
+  },
+
+  "webhook-targets-reset": () => {
+    state.webhookDraft = (state.targets?.webhook?.configured || []).join("\n");
+    render("targets");
+  },
+
+  "webhook-targets-append": (arg) => {
+    const lines = splitTargets(state.webhookDraft);
+    if (lines.includes(arg)) {
+      toast("这个会话已经在列表里了", "info");
+      return;
+    }
+    lines.push(arg);
+    state.webhookDraft = lines.join("\n");
     render("targets");
   },
 
@@ -3363,6 +3475,10 @@ const LIVE_SETTERS = {
   },
   "targets-draft": (value) => {
     state.targetsDraft = value;
+    syncTargetButtons();
+  },
+  "webhook-targets-draft": (value) => {
+    state.webhookDraft = value;
     syncTargetButtons();
   },
   "anirss-targets-draft": (value) => {

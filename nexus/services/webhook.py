@@ -331,13 +331,27 @@ class WebhookService:
         固定目标始终收；打开 「webhook_notify_watchers」 后，追番表里有这部番的
         会话也会收到 —— 这样一台下载器服务多个群时不会互相刷屏。
         RSS 类错误属于运维信息，只发固定目标，不去烦普通群。
+
+        固定目标优先取 「webhook_targets」，留空才退回 「push_targets」。
+        分开两个字段是因为这两条链的收件人经常不一样 —— 下载完成属于噪音较大的
+        流水账，多数人想丢进某个群；每日播报则更常留在私聊。共用一份名单的话，
+        想把下载通知挪进群就得连带把播报也挪走，反过来也一样。
         """
         deps = self._deps
         conf = deps.conf
-        targets = list(self._notifier.resolve_targets(conf.push_targets))
+        targets = list(self._notifier.resolve_targets(self.fixed_targets()))
         if conf.webhook_notify_watchers and notification.kind != "rss_error":
             targets.extend(await self._watchers(notification.title))
         return tuple(dict.fromkeys(target for target in targets if target))
+
+    def fixed_targets(self) -> tuple[str, ...]:
+        """本链的固定收件人：「webhook_targets」 优先，留空退回 「push_targets」。
+
+        返回的是配置原文而非解析结果 —— 解析（平台标识重映射、去重）统一由
+        Notifier 负责，这里只管「该看哪份名单」。
+        """
+        conf = self._deps.conf
+        return conf.webhook_targets or conf.push_targets
 
     async def _watchers(self, title: str) -> list[str]:
         """找出追番表里收录了这部番的会话。"""
@@ -387,7 +401,7 @@ class WebhookService:
             lines=("这是一条测试通知。", "看到这张卡说明 Webhook 到消息平台的链路是通的。"),
             subtitle=KIND_PHRASE["test"],
         )
-        targets = self._notifier.resolve_targets(self._deps.conf.push_targets)
+        targets = self._notifier.resolve_targets(self.fixed_targets())
         sent = await self._notifier.dispatch(notification, targets)
         return {"ok": bool(sent), "delivered": sent, "targets": len(targets)}
 
@@ -409,6 +423,8 @@ class WebhookService:
             "bind": self._deps.conf.webhook_bind,
             "auto_progress": self._deps.conf.webhook_auto_progress,
             "notify_watchers": self._deps.conf.webhook_notify_watchers,
+            "targets": list(self.fixed_targets()),
+            "targets_own": bool(self._deps.conf.webhook_targets),
         }
 
 

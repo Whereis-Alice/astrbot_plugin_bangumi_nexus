@@ -228,6 +228,7 @@ class NexusConfig:
     webhook_port: int = 0
     webhook_bind: str = "0.0.0.0"
     webhook_silent_kinds: tuple[str, ...] = ()
+    webhook_targets: tuple[str, ...] = ()
     dedup_window_seconds: int = 300
     # ani-rss 同步
     anirss_enabled: bool = False
@@ -359,6 +360,7 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
         webhook_port=_as_int(_get(raw, "webhook_port", 0), 0, low=0, high=65535),
         webhook_bind=_as_str(_get(raw, "webhook_bind", ""), "0.0.0.0"),
         webhook_silent_kinds=_as_list(_get(raw, "webhook_silent_kinds", ())),
+        webhook_targets=_as_list(_get(raw, "webhook_targets", ())),
         dedup_window_seconds=_as_int(
             _get(raw, "dedup_window_seconds", 300), 300, low=0, high=86400
         ),

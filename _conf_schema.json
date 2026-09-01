@@ -309,6 +309,12 @@
     "hint": "列在这里的事件照常推进追番进度，但不发通知卡片。ani-rss 同时勾了「开始下载」和「下载完成」时，把「下载完成」填进来就不会一集刷两条。支持中文动作名（开始下载 / 下载完成 / 缺少集数 / 订阅完结 / 摸鱼检测）或内部标识（download_start / download_complete / rename_complete）。",
     "default": []
   },
+  "webhook_targets": {
+    "description": "Webhook 专用推送目标（UMO）",
+    "type": "list",
+    "hint": "只影响 Webhook 这条链，留空则沿用上面的「播报目标会话」。想把下载通知丢进某个群、又让每日播报留在私聊时填这里。格式同播报目标，形如 aiocqhttp:GroupMessage:123456。",
+    "default": []
+  },
   "dedup_window_seconds": {
     "description": "通知去重时间窗（秒）",
     "type": "int",

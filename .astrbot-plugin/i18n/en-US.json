@@ -227,6 +227,10 @@
       "description": "Silent events (book-keeping only)",
       "hint": "Events listed here still advance watch progress but never render a card. When ani-rss has both download-started and download-complete enabled, list download-complete here to avoid two messages per episode. Chinese action names and internal ids both work."
     },
+    "webhook_targets": {
+      "description": "Webhook-only push targets (UMO)",
+      "hint": "Applies to the webhook chain only; leave empty to reuse the broadcast targets above. Use it when download notices belong in a group chat while the daily digest should stay in a direct message."
+    },
     "dedup_window_seconds": {
       "description": "Notification deduplication window (seconds)",
       "hint": "The same notification arriving twice inside the window is sent only once."

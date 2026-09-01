@@ -6,6 +6,11 @@ WebUI 表单永远送 string，落库前必须按「_conf_schema.json」的 type
 
 from __future__ import annotations
 
+import inspect
+from collections.abc import Mapping
+from types import SimpleNamespace
+from typing import Any, cast
+
 import pytest
 
 from nexus.config import SECRET_KEYS as CONFIG_SECRET_KEYS
@@ -14,7 +19,9 @@ from nexus.web.api import (
     CONF_GROUPS,
     CONF_SCHEMA,
     SECRET_KEYS,
+    NexusService,
     NexusWebError,
+    Wiring,
     coerce_config_value,
 )
 
@@ -155,3 +162,91 @@ class TestSecretKeys:
         empty = NexusConfig().payload()
         for key in SECRET_KEYS:
             assert empty[key] is False, key
+
+
+def _web_service(conf: NexusConfig | None = None) -> tuple[NexusService, list[dict[str, Any]]]:
+    """造一个只够跑配置写入的 「NexusService」。
+
+    「save_targets」 只碰 「config_writer」 与 activity 日志，其余服务不参与；
+    所以 Wiring 里全塞空壳，把写入动作记进一个列表供断言。
+    """
+
+    written: list[dict[str, Any]] = []
+
+    async def writer(patch: Mapping[str, Any]) -> Mapping[str, Any]:
+        written.append(dict(patch))
+        return {"applied": sorted(patch)}
+
+    blank = cast(Any, SimpleNamespace())
+    wiring = Wiring(
+        search=blank,
+        watchlist=blank,
+        subs=blank,
+        gacha=blank,
+        notifier=blank,
+        scheduler=blank,
+        webhook=blank,
+        diagnostics=blank,
+        config_writer=writer,
+    )
+    deps = cast(
+        Any,
+        SimpleNamespace(
+            conf=conf or NexusConfig(),
+            activity=SimpleNamespace(info=lambda scope, text: None),
+        ),
+    )
+    return NexusService(deps, wiring), written
+
+
+class TestPushChains:
+    """两条推送链共用一个界面，保存时必须靠链名分流。
+
+    漏掉链名的后果很具体：在管理页改 Webhook 收件人会顺手把每日播报的收件人
+    一起覆盖掉 —— 这正是 「webhook_targets」 值得单独存一份的理由。
+    """
+
+    def test_链名都映射到真实配置键(self) -> None:
+        conf = NexusConfig()
+        for key in NexusService.CHAIN_KEYS.values():
+            assert key in CONF_SCHEMA, key
+            assert CONF_SCHEMA[key].get("type") == "list", key
+            assert hasattr(conf, key), key
+
+    def test_默认链是播报(self) -> None:
+        """前端老代码不带 chain 也必须落到 「push_targets」。"""
+
+        parameters = inspect.signature(NexusService.save_targets).parameters
+        assert parameters["chain"].default == "push"
+
+    async def test_保存_webhook_链只写自己的键(self) -> None:
+        service, written = _web_service()
+        result = await service.save_targets([" x ", "", "y"], chain="webhook")
+        assert written == [{"webhook_targets": ["x", "y"]}]
+        assert result["chain"] == "webhook_targets"
+        assert result["configured"] == ["x", "y"]
+
+    async def test_保存播报链不碰_webhook(self) -> None:
+        service, written = _web_service()
+        await service.save_targets(["a"])
+        assert written == [{"push_targets": ["a"]}]
+
+    @pytest.mark.parametrize("chain", ["WEBHOOK", " webhook "])
+    async def test_链名大小写与空格都收(self, chain: str) -> None:
+        service, written = _web_service()
+        await service.save_targets(["a"], chain=chain)
+        assert written == [{"webhook_targets": ["a"]}]
+
+    async def test_未知链名被拒且不落盘(self) -> None:
+        service, written = _web_service()
+        with pytest.raises(NexusWebError):
+            await service.save_targets(["a"], chain="anirss")
+        assert written == []
+
+    async def test_字符串不当列表用(self) -> None:
+        """整段文本要在前端切好，后端收到裸字符串必须报错而不是逐字符入库。"""
+
+        service, written = _web_service()
+        with pytest.raises(NexusWebError):
+            await service.save_targets(cast(Any, "a,b"))
+        assert written == []

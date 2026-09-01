@@ -31,6 +31,7 @@ KIND_EYEBROW = {
     "rss_error": "RSS ERROR",
     "rss_update": "RSS UPDATE",
     "daily_digest": "DAILY",
+    "anirss_sync": "ANI-RSS SYNC",
     "test": "TEST",
 }
 ERROR_KINDS = frozenset({"download_error", "rss_error"})

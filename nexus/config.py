@@ -23,9 +23,25 @@ from .constants import (
 )
 from .dedup import normalize_prefer
 
+# ani-rss 的默认端口与地址规范化属于协议知识，放在客户端模块里只存一份；
+# 配置层直接复用，用户填 「192.168.1.8」 也能存成可用的 base URL。
+from .sources.anirss import normalize_base as normalize_anirss_base
+
 RENDERERS = ("auto", "html", "raster", "t2i", "text")
 SORT_KEYS = ("score", "doing", "time", "name")
 GACHA_SOURCES = ("auto", "yuc", "bangumi")
+
+#: 只写不读的敏感配置项。这份名单必须只有一处 —— 「payload()」 按它脱敏、
+#: WebUI 按它决定「不回显、留空即不改」，两边一旦对不上，前端就会把脱敏后的
+#: 「true」 当成真值回写，密钥被悄悄改成字符串 「true」。
+SECRET_KEYS: frozenset[str] = frozenset(
+    {
+        "bangumi_access_token",
+        "webhook_token",
+        "anirss_api_key",
+        "anirss_password",
+    }
+)
 
 DEFAULT_PERSONA_INSTRUCTION = (
     "请用你自己的口吻，简短自然地向大家转述下面这条番剧通知。"
@@ -174,6 +190,9 @@ class NexusConfig:
     push_sort_order: str = "desc"
     push_min_score: float = 0.0
     push_min_doing: int = 0
+    #: 每日播报只播当前会话追番表里的番。默认关 —— 新装的实例追番表是空的，
+    #: 一上来就开会让播报永远空手而归，用户只会以为功能坏了。
+    push_only_watchlist: bool = False
     # 人格转述
     persona_reply_enabled: bool = True
     persona_id: str = ""
@@ -196,6 +215,8 @@ class NexusConfig:
     rss_episode_prefer: tuple[str, ...] = EPISODE_PREFER_DEFAULT
     #: 同集归并的跨轮次时间窗（小时）。0 表示只在单次轮询内归并。
     rss_episode_dedup_window_hours: int = EPISODE_DEDUP_WINDOW_HOURS
+    #: RSS 推出新集时顺手把追番进度推到那一集。
+    rss_auto_progress: bool = True
     rsshub_base: str = "https://rsshub.app"
     mikan_base: str = "https://mikanani.me"
     # Webhook
@@ -207,6 +228,22 @@ class NexusConfig:
     webhook_port: int = 0
     webhook_bind: str = "0.0.0.0"
     dedup_window_seconds: int = 300
+    # ani-rss 同步
+    anirss_enabled: bool = False
+    anirss_base: str = ""
+    anirss_api_key: str = ""
+    anirss_username: str = ""
+    anirss_password: str = ""
+    #: 自动同步间隔（分钟）。0 表示只在 「/anirss sync」 或 WebUI 点按钮时同步。
+    anirss_sync_interval_minutes: int = 60
+    #: 同步结果往哪些会话推。留空＝不发通知，只静默写库。
+    anirss_sync_targets: tuple[str, ...] = ()
+    anirss_sync_watchlist: bool = True
+    #: 连 RSS 源一起搬过来。默认关：ani-rss 自己已经在下载了，插件再订阅同一个源
+    #: 只是把同一集的通知发两遍。想让机器人也播更新时才打开。
+    anirss_sync_subscriptions: bool = False
+    anirss_notify_on_change: bool = True
+    anirss_verify_tls: bool = True
     # anime1
     anime1_enabled: bool = True
     anime1_refresh_hours: tuple[int, ...] = (1, 13, 22)
@@ -235,13 +272,14 @@ class NexusConfig:
 
         data = asdict(self)
         data.pop("extras", None)
-        data["bangumi_access_token"] = bool(self.bangumi_access_token)
-        data["webhook_token"] = bool(self.webhook_token)
+        for key in SECRET_KEYS:
+            data[key] = bool(getattr(self, key, ""))
         data["push_times"] = list(self.push_times)
         data["push_targets"] = list(self.push_targets)
         data["anime1_refresh_hours"] = list(self.anime1_refresh_hours)
         data["global_excludes"] = list(self.global_excludes)
         data["rss_episode_prefer"] = list(self.rss_episode_prefer)
+        data["anirss_sync_targets"] = list(self.anirss_sync_targets)
         return data
 
 
@@ -281,6 +319,7 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
         push_sort_order=_as_choice(_get(raw, "push_sort_order", "desc"), ("desc", "asc"), "desc"),
         push_min_score=_as_float(_get(raw, "push_min_score", 0), 0.0, low=0.0, high=10.0),
         push_min_doing=_as_int(_get(raw, "push_min_doing", 0), 0, low=0),
+        push_only_watchlist=_as_bool(_get(raw, "push_only_watchlist", False), False),
         persona_reply_enabled=_as_bool(_get(raw, "persona_reply_enabled", True), True),
         persona_id=_as_str(_get(raw, "persona_id", "")),
         persona_provider_id=_as_str(_get(raw, "persona_provider_id", "")),
@@ -309,6 +348,7 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
             low=0,
             high=336,
         ),
+        rss_auto_progress=_as_bool(_get(raw, "rss_auto_progress", True), True),
         rsshub_base=_as_str(_get(raw, "rsshub_base", ""), "https://rsshub.app").rstrip("/"),
         mikan_base=_as_str(_get(raw, "mikan_base", ""), "https://mikanani.me").rstrip("/"),
         webhook_enabled=_as_bool(_get(raw, "webhook_enabled", False), False),
@@ -321,6 +361,22 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
         dedup_window_seconds=_as_int(
             _get(raw, "dedup_window_seconds", 300), 300, low=0, high=86400
         ),
+        anirss_enabled=_as_bool(_get(raw, "anirss_enabled", False), False),
+        # 地址在这里就洗成 「http://host:7789」 的规范形态，服务层与 WebUI 都不必再洗一遍。
+        anirss_base=normalize_anirss_base(_as_str(_get(raw, "anirss_base", ""))),
+        anirss_api_key=_as_str(_get(raw, "anirss_api_key", "")),
+        anirss_username=_as_str(_get(raw, "anirss_username", "")),
+        anirss_password=_as_str(_get(raw, "anirss_password", "")),
+        # 下限 5 分钟：ani-rss 是局域网服务，但同步会写库并可能发通知，
+        # 比 RSS 轮询更「重」，一分钟一次纯属浪费。
+        anirss_sync_interval_minutes=_as_int(
+            _get(raw, "anirss_sync_interval_minutes", 60), 60, low=0, high=1440
+        ),
+        anirss_sync_targets=_as_list(_get(raw, "anirss_sync_targets", ())),
+        anirss_sync_watchlist=_as_bool(_get(raw, "anirss_sync_watchlist", True), True),
+        anirss_sync_subscriptions=_as_bool(_get(raw, "anirss_sync_subscriptions", False), False),
+        anirss_notify_on_change=_as_bool(_get(raw, "anirss_notify_on_change", True), True),
+        anirss_verify_tls=_as_bool(_get(raw, "anirss_verify_tls", True), True),
         anime1_enabled=_as_bool(_get(raw, "anime1_enabled", True), True),
         anime1_refresh_hours=parse_hours(_get(raw, "anime1_refresh_hours", "1,13,22")),
         # 留空＝运行时自动挑一个启用中的平台实例，见 「nexus/platforms.py」

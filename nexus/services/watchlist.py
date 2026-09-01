@@ -263,6 +263,55 @@ class WatchlistService:
         return sorted(hits, key=lambda item: similarity(item.title, title), reverse=True)
 
 
+async def backfill_progress(
+    deps: Deps,
+    watchlist: WatchlistService,
+    *,
+    title: str,
+    episode: int,
+    targets: Sequence[str],
+    channel: str = "watch",
+) -> int:
+    """把追番进度推到指定集数，返回实际改动的条目数。
+
+    Webhook（下载完成）和 RSS（字幕组发布）两条链都要做这件事，所以抽到这里 ——
+    两处各写一遍的话，「只往前推」 这条规则迟早在一边被写漏。
+
+    三条不变量：
+
+    * **只往前，不往后**。补种老集数、字幕组补发前几集都不该把用户已看到的进度打回去。
+    * **总集数封顶**。有的源会把 SP/OVA 编成 「13」，硬写进去会让进度条超过 100%。
+    * **一部番只认最像的那一条**。同一会话里 「进击的巨人」 和 「进击的巨人 最终季」
+      都可能匹配上，全改会串台，所以只动相似度最高的那条。
+    """
+
+    if episode <= 0 or not title:
+        return 0
+    changed = 0
+    for session in targets:
+        if not session:
+            continue
+        try:
+            hits = await watchlist.matching_titles(session, title)
+        except Exception as error:  # noqa: BLE001 - 单个会话读失败不该拖垮整轮回填
+            deps.activity.warn(channel, f"匹配追番表失败：{error}")
+            continue
+        for item in hits[:1]:
+            if item.progress >= episode:
+                continue
+            capped = min(episode, item.total) if item.total else episode
+            if capped <= item.progress:
+                continue
+            try:
+                await deps.store.update_watch(item.id, progress=capped, updated_at=time.time())
+            except Exception as error:  # noqa: BLE001
+                deps.activity.warn(channel, f"回填进度失败：{error}")
+                continue
+            changed += 1
+            deps.activity.info(channel, f"{session} 的「{item.title}」进度回填到 {capped}")
+    return changed
+
+
 def _sort_key(item: WatchItem) -> tuple[int, float, str]:
     """在追的排前面，其次按最近更新时间倒序。"""
     rank = {STATUS_WATCHING: 0, STATUS_PLANNED: 1, STATUS_FINISHED: 2, STATUS_DROPPED: 3}
@@ -300,5 +349,6 @@ __all__ = [
     "STATUS_PLANNED",
     "STATUS_WATCHING",
     "WatchlistService",
+    "backfill_progress",
     "subject_to_item",
 ]

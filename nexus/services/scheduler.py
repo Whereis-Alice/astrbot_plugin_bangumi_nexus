@@ -21,10 +21,13 @@ from datetime import datetime, timedelta
 
 from astrbot.api import logger
 
+from ..models import Notification
+from .anirss import AniRssSyncService
 from .base import PREF_DAILY, Deps
 from .notifier import Notifier
 from .search import SearchService
 from .subscriptions import SubscriptionService
+from .watchlist import WatchlistService, backfill_progress
 
 # 错过的触发时刻，落后不超过这个秒数就补跑；再久就当这一轮作废，
 # 免得笔记本合盖一整天、开盖瞬间被十几条播报糊脸。
@@ -49,14 +52,19 @@ class Scheduler:
         search: SearchService,
         subscriptions: SubscriptionService,
         notifier: Notifier,
+        watchlist: WatchlistService | None = None,
+        anirss: AniRssSyncService | None = None,
     ) -> None:
         self._deps = deps
         self._search = search
         self._subs = subscriptions
         self._notifier = notifier
+        self._watchlist = watchlist
+        self._anirss = anirss
         self._task: asyncio.Task[None] | None = None
         self._last_tick: datetime | None = None
         self._next_rss: datetime | None = None
+        self._next_anirss: datetime | None = None
         self._last_prune = 0.0
         self._polls = 0
         self._pushes = 0
@@ -138,6 +146,16 @@ class Scheduler:
             hours = tuple(f"{hour:02d}:00" for hour in conf.anime1_refresh_hours)
             if self._due_slots(now, previous, hours):
                 await self.refresh_anime1()
+        # ani-rss 同步走间隔而不是固定时刻：它是「跟本地下载器对齐」，
+        # 越接近实时越好，没有「早上八点半播报」那种仪式感需求。
+        if conf.anirss_enabled and conf.anirss_sync_interval_minutes > 0:
+            if self._next_anirss is None or now >= self._next_anirss:
+                self._next_anirss = now + timedelta(
+                    minutes=max(1, conf.anirss_sync_interval_minutes)
+                )
+                await self.run_anirss()
+        elif self._next_anirss is not None:
+            self._next_anirss = None
         await self._maybe_prune()
 
     @staticmethod
@@ -229,8 +247,53 @@ class Scheduler:
         for session, notification in results:
             if await self._notifier.send(notification, session):
                 sent += 1
+            # 回填放在投递之后：字幕组发了新集，说明这一集确实存在，进度理应跟上。
+            # 只在投递成功后做，是为了让「进度动了」和「用户收到通知」保持一致 ——
+            # 否则进度悄悄往前跳，用户会以为自己漏看了一条播报。
+            await self._backfill(session, notification)
         deps.activity.info("rss", f"轮询产出 {len(results)} 条更新，投递成功 {sent} 条")
         return sent
+
+    async def _backfill(self, session: str, notification: Notification) -> None:
+        """RSS 更新顺手把追番进度推到这一集。
+
+        「targets」 只给这一条通知实际投递到的会话：订阅是按会话建的，
+        A 群订的番不该把 B 群的进度也一起推动。
+        """
+
+        deps = self._deps
+        if not deps.conf.rss_auto_progress or self._watchlist is None:
+            return
+        try:
+            episode = int(notification.payload.get("episode") or 0)
+        except (TypeError, ValueError):
+            return
+        if episode <= 0:
+            return
+        await backfill_progress(
+            deps,
+            self._watchlist,
+            title=notification.title,
+            episode=episode,
+            targets=(session,),
+            channel="rss",
+        )
+
+    # ------------------------------------------------------------------
+    # ani-rss 同步
+    # ------------------------------------------------------------------
+    async def run_anirss(self, *, force: bool = False) -> dict[str, object]:
+        """跑一轮 ani-rss 同步。异常一律吞掉：本地下载器不在线是常态。"""
+
+        deps = self._deps
+        if self._anirss is None:
+            return {"ok": False, "error": "同步服务未装配"}
+        try:
+            return await self._anirss.sync(force=force)
+        except Exception as error:  # noqa: BLE001 - 循环必须活着
+            self._errors += 1
+            deps.activity.error("anirss", f"同步失败：{error}")
+            return {"ok": False, "error": str(error)}
 
     # ------------------------------------------------------------------
     # anime1 缓存刷新与历史清理
@@ -271,6 +334,7 @@ class Scheduler:
         return {
             "running": "运行中" if self.running else "未启动",
             "next_rss": self._next_rss.strftime("%H:%M") if self._next_rss else "",
+            "next_anirss": self._next_anirss.strftime("%H:%M") if self._next_anirss else "",
             "next_push": self._next_push(),
             "polls": self._polls,
             "pushes": self._pushes,

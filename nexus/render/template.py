@@ -1417,10 +1417,93 @@ def build_diagnose_card(
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="CHECK"))
 
 
+def build_anirss_card(
+    theme: Theme | str,
+    *,
+    status: Mapping[str, object],
+    entries: Sequence[tuple[str, str, str]] = (),
+    width: int = CARD_WIDTH,
+    version: str = "",
+) -> str:
+    """ani-rss 同步状态卡。
+
+    「entries」 每项是 (标题, 一行简述, 尾标)，尾标一般放进度或「已完结」。
+    这张卡同时服务 「/anirss」 和同步结果通知，所以状态字段全部通过 「status」
+    映射传进来，而不是让模板层去碰服务对象。
+    """
+
+    resolved = theme if isinstance(theme, Theme) else resolve_theme(theme)
+    configured = bool(status.get("configured"))
+    reachable = bool(status.get("ok"))
+    base = str(status.get("base") or "未配置")
+    total = _as_display_int(status.get("total"))
+    active = _as_display_int(status.get("active"))
+    synced = _as_display_int(status.get("synced"))
+    mark = "已连通" if reachable else ("已配置未连通" if configured else "未配置")
+    chips = _chips(
+        (
+            mark,
+            f"鉴权 {_AUTH_LABEL.get(str(status.get('auth') or ''), '未设置')}",
+            f"间隔 {_as_display_int(status.get('interval'))} 分钟"
+            if status.get("interval")
+            else "自动同步已关",
+        )
+    )
+    hero = _hero(
+        eyebrow="ANI-RSS SYNC",
+        title="ani-rss 同步",
+        sub=clip(base, 72),
+        chips=chips,
+        stats=(
+            _stat(f"{active}/{total}", "启用/总数", accent=True),
+            _stat(synced, "已入库"),
+        ),
+    )
+    facts = _kv(
+        [
+            ("上次同步", str(status.get("last_at_label") or "还没同步过")),
+            ("同步方向", str(status.get("direction") or "")),
+            ("推送会话", str(status.get("targets_label") or "未指定")),
+            ("提示", str(status.get("note") or "")),
+        ]
+    )
+    rows = [(str(index), title, note, tail) for index, (title, note, tail) in enumerate(entries, 1)]
+    listing = _rows(rows) or _empty(
+        "没读到订阅 —— 确认 ani-rss 已启动，端口和密钥填对了"
+        if configured
+        else "先在配置里填 ani-rss 地址和密钥"
+    )
+    body = (
+        '<div class="body">'
+        + _block("连接", facts)
+        + _block("ani-rss 里的订阅", listing, hint=f"共 {total} 条")
+        + "</div>"
+    )
+    footer = _footer("番剧中枢", "/anirss", (version,) if version else ())
+    return _document(
+        resolved,
+        width=width,
+        body=_sheet(hero, body, footer, stamp="SYNC" if reachable else "SETUP"),
+    )
+
+
+_AUTH_LABEL = {"api_key": "API Key", "password": "账号密码", "none": "未设置"}
+
+
+def _as_display_int(value: object) -> int:
+    """卡片里只想显示整数，字符串/None/浮点全部收敛掉。"""
+
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
 __all__ = [
     "CARD_WIDTH",
     "HELP_CARD_WIDTH",
     "HELP_COLUMNS",
+    "build_anirss_card",
     "build_calendar_card",
     "build_diagnose_card",
     "build_episode_card",

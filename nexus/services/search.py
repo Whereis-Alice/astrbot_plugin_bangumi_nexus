@@ -25,7 +25,7 @@ from ..render import (
     flatten,
 )
 from ..sources.bangumi import TYPE_ANIME, TYPE_BOOK, is_movie, staff_from_infobox
-from ..titles import parse_broadcast, season_code, season_label
+from ..titles import parse_broadcast, season_code, season_label, similarity
 from .base import (
     Deps,
     Reply,
@@ -123,6 +123,36 @@ async def _long_running(
         if isinstance(subject, Subject):
             result.append((subject, slot.slot_label))
     return tuple(result)
+
+
+WATCHLIST_MATCH_THRESHOLD = 0.72
+
+
+async def _watched_titles(deps: Deps, umo: str) -> tuple[str, ...]:
+    """这个会话追番表里还在追的标题，用于「播报只播我追的番」。
+
+    「已抛弃」 的条目不算 —— 用户明确弃了还往群里刷，比不过滤更烦人。
+    读表失败时返回空元组，调用方会据此放弃过滤（宁可多播，不要因为一次
+    数据库抖动就整条播报静默）。
+    """
+
+    try:
+        items = await deps.store.list_watch(umo)
+    except Exception as error:  # noqa: BLE001 - 过滤是增强项，读表失败就退回不过滤
+        deps.activity.warn("push", f"读取追番表失败，本轮不过滤：{error}")
+        return ()
+    return tuple(item.title for item in items if item.status != "dropped" and item.title)
+
+
+def _in_watchlist(subject: Subject, titles: Sequence[str]) -> bool:
+    """条目是否命中追番表。中日双名都比一遍，取最高相似度。"""
+
+    names = [name for name in (subject.name_cn, subject.name) if name]
+    for name in names:
+        for wanted in titles:
+            if similarity(name, wanted) >= WATCHLIST_MATCH_THRESHOLD:
+                return True
+    return False
 
 
 class SearchService:
@@ -404,12 +434,23 @@ class SearchService:
             for item in day.items
             if item.score >= conf.push_min_score and item.doing >= conf.push_min_doing
         ]
+        # 「只播我追的番」 放在评分/在看人数之后：两层是「与」关系，
+        # 而追番表通常只有十来部，先做便宜的数值过滤能少算一堆相似度。
+        wanted: tuple[str, ...] = ()
+        if conf.push_only_watchlist:
+            wanted = await _watched_titles(deps, umo)
+            if not wanted:
+                return Reply()
+            picked = [item for item in picked if _in_watchlist(item, wanted)]
         if not picked:
             return Reply()
         ordered = _sort_subjects(picked, conf.push_sort_by, conf.push_sort_order)
         limit = max(1, conf.push_max_items)
         theme, _ = await style_for(deps, umo)
         extras = await _long_running(deps, weekday=weekday, days=days, limit=LONG_RUN_LIMIT)
+        if wanted:
+            # 年番那一栏同样要过滤，否则开了「只播我追的番」还是会冒出没追的年番。
+            extras = tuple(pair for pair in extras if _in_watchlist(pair[0], wanted))
         long_items = [subject for subject, _ in extras]
         shown = ordered[:limit] + long_items
         covers = await cover_map(deps, ((item.id, item.image) for item in shown))

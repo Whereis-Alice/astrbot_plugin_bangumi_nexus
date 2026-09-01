@@ -8,7 +8,15 @@ from __future__ import annotations
 
 import pytest
 
-from nexus.web.api import CONF_SCHEMA, NexusWebError, coerce_config_value
+from nexus.config import SECRET_KEYS as CONFIG_SECRET_KEYS
+from nexus.config import NexusConfig
+from nexus.web.api import (
+    CONF_GROUPS,
+    CONF_SCHEMA,
+    SECRET_KEYS,
+    NexusWebError,
+    coerce_config_value,
+)
 
 
 class TestUnknownKey:
@@ -104,3 +112,46 @@ class TestSchemaIntegrity:
                 spec.get("type", "string"), ""
             )
             coerce_config_value(key, sample)
+
+
+class TestConfGroups:
+    """管理页的配置分组必须覆盖全部键，漏一个用户就只能去 Dashboard 找。"""
+
+    def test_每个键都归进了一个分组(self) -> None:
+        grouped = [key for _, _, keys in CONF_GROUPS for key in keys]
+        missing = [key for key in CONF_SCHEMA if key not in set(grouped)]
+        assert missing == [], f"这些配置项在管理页里没有归组：{missing}"
+
+    def test_分组里没有重复或幽灵键(self) -> None:
+        grouped = [key for _, _, keys in CONF_GROUPS for key in keys]
+        assert len(grouped) == len(set(grouped)), "同一个键被归进了两个分组"
+        ghosts = [key for key in grouped if key not in CONF_SCHEMA]
+        assert ghosts == [], f"分组里写了 schema 里没有的键：{ghosts}"
+
+    def test_分组标题唯一(self) -> None:
+        ids = [gid for gid, _, _ in CONF_GROUPS]
+        names = [name for _, name, _ in CONF_GROUPS]
+        assert len(ids) == len(set(ids))
+        assert len(names) == len(set(names))
+
+
+class TestSecretKeys:
+    """脱敏名单只能有一份，否则 WebUI 会把「true」当成真密钥写回去。"""
+
+    def test_web_层直接复用配置层的名单(self) -> None:
+        assert SECRET_KEYS is CONFIG_SECRET_KEYS
+
+    def test_名单里的键都真实存在(self) -> None:
+        conf = NexusConfig()
+        for key in SECRET_KEYS:
+            assert hasattr(conf, key), key
+            assert key in CONF_SCHEMA, key
+
+    def test_payload_把敏感项脱成布尔(self) -> None:
+        conf = NexusConfig(**dict.fromkeys(SECRET_KEYS, "s3cret"))
+        data = conf.payload()
+        for key in SECRET_KEYS:
+            assert data[key] is True, key
+        empty = NexusConfig().payload()
+        for key in SECRET_KEYS:
+            assert empty[key] is False, key

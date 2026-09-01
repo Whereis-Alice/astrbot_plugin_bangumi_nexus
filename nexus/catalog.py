@@ -292,6 +292,12 @@ SUBSCRIBE = Category(
             aliases=("RSS帮助",),
             origin="astrbot_plugin_rsshub",
         ),
+        Command(
+            "anirss",
+            "anirss [sync|test]",
+            "看 ani-rss 同步状态；「sync」 立刻同步、「test」 测连接（仅管理员）。",
+            aliases=("同步追番",),
+        ),
     ),
 )
 

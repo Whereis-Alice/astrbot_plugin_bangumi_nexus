@@ -50,6 +50,7 @@ from .nexus.render import (
     resolve_theme,
     theme_keys,
 )
+from .nexus.services.anirss import AUTH_LABEL, AniRssSyncService
 from .nexus.services.base import (
     Deps,
     Reply,
@@ -145,11 +146,14 @@ class BangumiNexusPlugin(Star):
         self._webhook = WebhookService(
             self._deps, notifier=self._notifier, watchlist=self._watchlist
         )
+        self._anirss = AniRssSyncService(self._deps, notifier=self._notifier)
         self._scheduler = Scheduler(
             self._deps,
             search=self._search,
             subscriptions=self._subs,
             notifier=self._notifier,
+            watchlist=self._watchlist,
+            anirss=self._anirss,
         )
         self._listener = self._build_listener(conf)
 
@@ -163,6 +167,7 @@ class BangumiNexusPlugin(Star):
             webhook=self._webhook,
             diagnostics=self._diagnostics,
             listener=self._listener,
+            anirss=self._anirss,
             config_writer=self._apply_config if self._config_writable() else None,
         )
         self._service = NexusService(self._deps, self._wiring)
@@ -1203,6 +1208,73 @@ class BangumiNexusPlugin(Star):
 
         async for item in self._serve(event, "rsshelp", lambda umo, conf: self._subs.help(umo)):
             yield item
+
+    @filter.command("anirss", alias={"同步追番"}, priority=10)
+    async def cmd_anirss(self, event: AstrMessageEvent):
+        """ani-rss 同步：「/anirss」 看状态，「/anirss sync」 立刻同步，「/anirss test」 测连接。
+
+        没拆成三条独立指令，是因为这三件事只有管理员会用，占三个词反而
+        更容易和别的插件撞名。
+        """
+
+        token = (self._args(event).split() or [""])[0].lower()
+
+        if token in {"sync", "同步"}:
+            if not event.is_admin():
+                yield event.plain_result("「anirss sync」 只有管理员能用")
+                event.stop_event()
+                return
+            async for item in self._serve(
+                event, "anirss sync", self._anirss_sync, busy="\u2026 正在同步 ani-rss"
+            ):
+                yield item
+            return
+
+        if token in {"test", "测试"}:
+            if not event.is_admin():
+                yield event.plain_result("「anirss test」 只有管理员能用")
+                event.stop_event()
+                return
+            async for item in self._serve(event, "anirss test", self._anirss_test):
+                yield item
+            return
+
+        async for item in self._serve(
+            event, "anirss", lambda umo, conf: self._anirss.card(umo), busy=BUSY_RENDER
+        ):
+            yield item
+
+    async def _anirss_sync(self, umo: str, conf: NexusConfig) -> Reply:
+        """手动同步一次。目标会话缺省时就地用当前会话，免得管理员在群里点了没反应。"""
+
+        targets = conf.anirss_sync_targets or (umo,)
+        result = await self._anirss.sync(targets=tuple(targets), force=True)
+        if not result.get("ok"):
+            return Reply.plain(f"ani-rss 同步失败：{result.get('error') or '未知原因'}")
+        return Reply.plain(
+            "ani-rss 同步完成\n"
+            f"· 远端条目 {result.get('total', 0)} / 在追 {result.get('active', 0)}\n"
+            f"· 新增追番 {result.get('added', 0)} · 更新进度 {result.get('updated', 0)}"
+            f" · 建订阅 {result.get('subscribed', 0)}\n"
+            f"· 会话 {'、'.join(result.get('sessions') or ()) or '无'}"
+        )
+
+    async def _anirss_test(self, umo: str, conf: NexusConfig) -> Reply:
+        """连通性自检。"""
+
+        result = await self._anirss.test()
+        if not result.get("ok"):
+            return Reply.plain(
+                f"连不上 ani-rss：{result.get('error') or '未知原因'}\n"
+                f"地址 {result.get('base') or '未填'}"
+                f" · 鉴权 {AUTH_LABEL.get(str(result.get('auth') or ''), '未设置')}"
+            )
+        return Reply.plain(
+            "ani-rss 连接正常\n"
+            f"· 地址 {result.get('base') or ''}\n"
+            f"· 鉴权 {AUTH_LABEL.get(str(result.get('auth') or ''), '未设置')}\n"
+            f"· 远端条目 {result.get('total', 0)}"
+        )
 
     # ------------------------------------------------------------------
     # 指令：娱乐

@@ -885,6 +885,9 @@ class SubscriptionService:
                 "hidden": hidden,
                 "merged": merged,
                 "carried": carried,
+                # 本轮推送里最大的集数，交给调度器回填追番进度。认不出集号就给 0，
+                # 回填端会直接跳过 —— 剧场版、合集、纯资讯源没有集号是正常的。
+                "episode": _peak_episode(limited),
             },
         )
         deps.activity.info("rss", f"{sub.name} 有 {len(fresh)} 条新更新")
@@ -1106,6 +1109,23 @@ def _group_detail(group: MikanGroup) -> str:
         group.samples[0] if group.samples else "",
     ]
     return " · ".join(part for part in parts if part)
+
+
+def _peak_episode(items: Sequence[FeedItem]) -> int:
+    """取一批发布条目里最大的集号，用于回填追番进度。
+
+    取**最大**而非最小：字幕组补档时一轮可能同时发 05、06、07，进度理应跟到 07。
+    「episode_number」 返回的是字符串（保留 「01」 这种前导零的原样），所以这里
+    还要挡掉 「SP」「OVA」 之类非数字的写法。
+    """
+
+    best = 0
+    for item in items:
+        raw = episode_number(item.title)
+        if not raw or not raw.isdigit():
+            continue
+        best = max(best, int(raw))
+    return best
 
 
 def _stamp(moment: float) -> str:

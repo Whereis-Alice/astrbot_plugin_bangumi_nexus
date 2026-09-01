@@ -18,6 +18,7 @@ from .raster import PILLOW_AVAILABLE, RasterCard, Section, card_from_text, font_
 from .template import (
     CARD_WIDTH,
     HELP_CARD_WIDTH,
+    build_anirss_card,
     build_calendar_card,
     build_diagnose_card,
     build_episode_card,
@@ -87,6 +88,7 @@ __all__ = [
     "Theme",
     "asset_card_path",
     "available_asset_themes",
+    "build_anirss_card",
     "build_calendar_card",
     "build_diagnose_card",
     "build_episode_card",

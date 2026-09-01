@@ -27,7 +27,7 @@ from ..models import Notification
 from ..titles import similarity
 from .base import Deps
 from .notifier import Notifier
-from .watchlist import STATUS_DROPPED, WatchlistService
+from .watchlist import STATUS_DROPPED, WatchlistService, backfill_progress
 
 # 事件标识 → 本插件内部 kind。AutoBangumi 各版本字段名不统一，
 # 这里把见过的写法全列出来，识别不出再走字段推断。
@@ -267,24 +267,14 @@ class WebhookService:
         deps = self._deps
         if not deps.conf.webhook_auto_progress or self._watchlist is None:
             return
-        episode = _as_int(notification.payload.get("episode"))
-        if not episode:
-            return
-        for session in targets:
-            try:
-                hits = await self._watchlist.matching_titles(session, notification.title)
-            except Exception:  # noqa: BLE001
-                continue
-            for item in hits[:1]:
-                if item.progress >= episode:
-                    continue
-                capped = min(episode, item.total) if item.total else episode
-                try:
-                    await deps.store.update_watch(item.id, progress=capped, updated_at=time.time())
-                except Exception as error:  # noqa: BLE001
-                    deps.activity.warn("webhook", f"回填进度失败：{error}")
-                    continue
-                deps.activity.info("webhook", f"{session} 的「{item.title}」进度回填到 {capped}")
+        await backfill_progress(
+            deps,
+            self._watchlist,
+            title=notification.title,
+            episode=_as_int(notification.payload.get("episode")),
+            targets=targets,
+            channel="webhook",
+        )
 
     # ------------------------------------------------------------------
     # 观测

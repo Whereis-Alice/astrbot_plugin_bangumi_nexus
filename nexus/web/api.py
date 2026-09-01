@@ -34,6 +34,7 @@ from urllib.parse import quote
 from ..catalog import alias_count, category_count, command_count
 from ..catalog import payload as catalog_payload
 from ..config import GACHA_SOURCES, RENDERERS, SORT_KEYS, NexusConfig
+from ..config import SECRET_KEYS as CONFIG_SECRET_KEYS
 from ..constants import (
     EXCLUDE_PRESETS,
     MAX_SUBSCRIPTIONS_PER_SESSION,
@@ -58,6 +59,7 @@ from ..render import (
     theme_keys,
     themes_payload,
 )
+from ..services.anirss import AniRssSyncService
 from ..services.base import (
     PREF_DAILY,
     PREF_EXCLUDES,
@@ -93,8 +95,9 @@ from .listener import WebhookListener
 STATE_KEY = "webui_state"
 STATE_MAX_BYTES = 32_000
 
-# 敏感配置项：可写不可读。
-SECRET_KEYS = frozenset({"bangumi_access_token", "webhook_token"})
+# 敏感配置项：可写不可读。真源在 「nexus.config」，此处只做转出，
+# 避免两份名单各自演化后把脱敏值当真值回写。
+SECRET_KEYS = CONFIG_SECRET_KEYS
 
 # 活动日志一次最多回多少条。
 LOG_LIMIT = 200
@@ -147,7 +150,17 @@ _CHOICES: dict[str, tuple[str, ...]] = {
 
 # 配置项分组，决定 WebUI 里的显示顺序与折叠分区。
 CONF_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("render", "卡片与渲染", ("card_theme", "card_renderer", "card_width", "long_reply_as_card")),
+    (
+        "render",
+        "卡片与渲染",
+        (
+            "card_theme",
+            "card_renderer",
+            "card_width",
+            "show_watch_text",
+            "long_reply_as_card",
+        ),
+    ),
     (
         "network",
         "网络与缓存",
@@ -178,6 +191,7 @@ CONF_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "push_sort_order",
             "push_min_score",
             "push_min_doing",
+            "push_only_watchlist",
         ),
     ),
     (
@@ -198,12 +212,14 @@ CONF_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "rss_enabled",
             "rss_interval_minutes",
             "rss_max_items_per_poll",
+            "rss_pick_source",
             "rss_first_poll_silent",
             "rss_history_days",
             "global_excludes",
             "rss_episode_dedup",
             "rss_episode_dedup_window_hours",
             "rss_episode_prefer",
+            "rss_auto_progress",
             "rsshub_base",
             "mikan_base",
         ),
@@ -231,6 +247,23 @@ CONF_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "send_max_retries",
             "send_retry_delay_seconds",
             "send_concurrency",
+        ),
+    ),
+    (
+        "anirss",
+        "ani-rss 同步",
+        (
+            "anirss_enabled",
+            "anirss_base",
+            "anirss_api_key",
+            "anirss_username",
+            "anirss_password",
+            "anirss_sync_interval_minutes",
+            "anirss_sync_targets",
+            "anirss_sync_watchlist",
+            "anirss_sync_subscriptions",
+            "anirss_notify_on_change",
+            "anirss_verify_tls",
         ),
     ),
     ("misc", "其它", ("gacha_source", "webui_enabled", "webui_theme")),
@@ -337,6 +370,7 @@ class Wiring:
     scheduler: Scheduler
     webhook: WebhookService
     diagnostics: DiagnosticsService
+    anirss: AniRssSyncService | None = None
     listener: WebhookListener | None = None
     config_writer: Callable[[Mapping[str, Any]], Awaitable[Mapping[str, Any]]] | None = None
 
@@ -794,6 +828,47 @@ class NexusService:
 
     async def webhook_selftest(self) -> dict[str, Any]:
         return await self._wiring.webhook.selftest()
+
+    # -- ani-rss 同步 ------------------------------------------------------
+    async def anirss_view(self) -> dict[str, Any]:
+        """ani-rss 面板的数据：连接状态 + 对方的订阅列表 + 本地已认领记录。"""
+
+        service = self._wiring.anirss
+        if service is None:
+            return {
+                "ok": False,
+                "enabled": False,
+                "error": "同步服务未装配",
+                "items": [],
+                "links": [],
+                "writable": self._wiring.config_writer is not None,
+            }
+        payload = dict(await service.status())
+        # 面板上的开关直接写配置，所以要先告诉前端「这套运行环境到底能不能写」，
+        # 否则点下去只会收到一句 503。
+        payload["writable"] = self._wiring.config_writer is not None
+        try:
+            payload["links"] = await self._deps.store.list_anirss_links()
+        except Exception as error:  # noqa: BLE001 - 认领记录读不到不该让整个面板白屏
+            payload["links"] = []
+            payload["error"] = payload.get("error") or f"读取同步记录失败：{error}"
+        payload.setdefault("items", [])
+        return payload
+
+    async def anirss_sync(self, targets: Sequence[Any] = (), force: bool = True) -> dict[str, Any]:
+        """WebUI 点「立即同步」。默认 「force」：手点的人刚在下载器里加完订阅。"""
+
+        service = self._wiring.anirss
+        if service is None:
+            raise NexusWebError("同步服务未装配")
+        picked = tuple(str(item).strip() for item in targets or () if str(item).strip())
+        return await service.sync(targets=picked, force=bool(force))
+
+    async def anirss_test(self) -> dict[str, Any]:
+        service = self._wiring.anirss
+        if service is None:
+            raise NexusWebError("同步服务未装配")
+        return await service.test()
 
     # -- 诊断 / 娱乐 / 搜索 ------------------------------------------------
     async def diagnose(self) -> dict[str, Any]:
@@ -1319,6 +1394,9 @@ class NexusWebApi:
             (prefix + "/push_now", self.post_push_now, ["POST"], label + "立即播报"),
             (prefix + "/poll_now", self.post_poll_now, ["POST"], label + "立即抓取 RSS"),
             (prefix + "/refresh", self.post_refresh, ["POST"], label + "刷新在线观看索引"),
+            (prefix + "/anirss", self.get_anirss, ["GET"], label + "ani-rss 同步状态"),
+            (prefix + "/anirss/sync", self.post_anirss_sync, ["POST"], label + "立即同步 ani-rss"),
+            (prefix + "/anirss/test", self.post_anirss_test, ["POST"], label + "测试 ani-rss 连接"),
             (prefix + "/diagnose", self.get_diagnose, ["GET"], label + "数据源体检"),
             (
                 prefix + "/webhook/test",
@@ -1500,6 +1578,25 @@ class NexusWebApi:
 
     async def post_refresh(self) -> Any:
         return await self._guard(lambda: self._wrap(self._service.refresh_anime1()))
+
+    async def get_anirss(self) -> Any:
+        return await self._guard(lambda: self._wrap(self._service.anirss_view()))
+
+    async def post_anirss_sync(self) -> Any:
+        async def run() -> Any:
+            body = await _json_body()
+            targets = body.get("targets") or ()
+            if isinstance(targets, (str, bytes)):
+                raise NexusWebError("同步目标必须是一个列表")
+            force = body.get("force")
+            return _json(
+                await self._service.anirss_sync(targets, True if force is None else bool(force))
+            )
+
+        return await self._guard(run)
+
+    async def post_anirss_test(self) -> Any:
+        return await self._guard(lambda: self._wrap(self._service.anirss_test()))
 
     async def get_diagnose(self) -> Any:
         return await self._guard(lambda: self._wrap(self._service.diagnose()))

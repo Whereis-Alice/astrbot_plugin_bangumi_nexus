@@ -26,7 +26,7 @@ from .models import Subscription, WatchItem
 
 T = TypeVar("T")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS watchlist (
@@ -95,6 +95,17 @@ CREATE TABLE IF NOT EXISTS kv (
     value  TEXT NOT NULL DEFAULT '',
     at     REAL NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS anirss_links (
+    umo         TEXT    NOT NULL,
+    ani_id      TEXT    NOT NULL,
+    watch_id    INTEGER NOT NULL DEFAULT 0,
+    sub_id      INTEGER NOT NULL DEFAULT 0,
+    title       TEXT    NOT NULL DEFAULT '',
+    updated_at  REAL    NOT NULL DEFAULT 0,
+    PRIMARY KEY (umo, ani_id)
+);
+CREATE INDEX IF NOT EXISTS idx_anirss_umo ON anirss_links(umo);
 """
 
 
@@ -139,7 +150,8 @@ class Store:
         conn.executescript(_SCHEMA)
         current = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
         # 迁移脚本按版本追加即可；空 dict 表示当前版本无需额外 DDL。
-        # v2 新增的 「episode_history」 表由上面的建表脚本幂等创建，无需补 DDL。
+        # v2 的 「episode_history」 与 v3 的 「anirss_links」 都是纯新增表，
+        # 由上面的建表脚本幂等创建，老库升级时不需要补 ALTER。
         migrations: dict[int, tuple[str, ...]] = {}
         for version in range(current + 1, SCHEMA_VERSION + 1):
             for statement in migrations.get(version, ()):
@@ -174,13 +186,34 @@ class Store:
     # -- 追番清单 -----------------------------------------------------------
 
     async def upsert_watch(self, item: WatchItem) -> WatchItem:
+        """写入或更新一行追番记录。
+
+        认领关系优先：「item.id」 非零时按 id 落库（连标题一起改），
+        这样外部改过标题（比如 ani-rss 同步过来的日文名换成中文名）也不会
+        再插出一条重复记录；id 为 0 时才退回按 (会话, 标题) 找同名行。
+        """
+
         def _work() -> WatchItem:
             conn = self._connection()
             now = time.time()
-            row = conn.execute(
+            target = 0
+            if item.id:
+                owned = conn.execute(
+                    "SELECT id FROM watchlist WHERE id=? AND umo=?", (item.id, item.umo)
+                ).fetchone()
+                if owned is not None:
+                    target = int(owned["id"])
+            clash = conn.execute(
                 "SELECT id FROM watchlist WHERE umo=? AND title=?", (item.umo, item.title)
             ).fetchone()
-            if row is None:
+            clash_id = int(clash["id"]) if clash is not None else 0
+            if not target:
+                target = clash_id
+            elif clash_id and clash_id != target:
+                # 标题撞上另一行：唯一索引不允许并存，删掉同名的那行，
+                # 保留 id 指向的记录（它带着认领关系，更可信）。
+                conn.execute("DELETE FROM watchlist WHERE id=?", (clash_id,))
+            if not target:
                 count = conn.execute(
                     "SELECT COUNT(*) FROM watchlist WHERE umo=?", (item.umo,)
                 ).fetchone()[0]
@@ -210,12 +243,13 @@ class Store:
                 )
                 new_id = int(cursor.lastrowid or 0)
             else:
-                new_id = int(row["id"])
+                new_id = target
                 conn.execute(
-                    "UPDATE watchlist SET subject_id=?, status=?, progress=?, total=?,"
+                    "UPDATE watchlist SET subject_id=?, title=?, status=?, progress=?, total=?,"
                     " score=?, cover=?, weekday=?, note=?, updated_at=? WHERE id=?",
                     (
                         item.subject_id,
+                        item.title,
                         item.status,
                         item.progress,
                         item.total,
@@ -669,6 +703,72 @@ class Store:
 
         return await self._run(_work)
 
+    # -- ani-rss 同步记账 ----------------------------------------------------
+
+    async def list_anirss_links(self, umo: str = "") -> list[dict[str, Any]]:
+        """列出已经同步过的 ani-rss 条目。
+
+        存在的意义是「认领」：同一部番第二次同步时要更新原来那行，而不是靠标题
+        再猜一遍 —— 用户在 ani-rss 里改过标题（换成中文名）也照样对得上。
+        """
+
+        def _work() -> list[dict[str, Any]]:
+            conn = self._connection()
+            if umo:
+                rows = conn.execute(
+                    "SELECT umo, ani_id, watch_id, sub_id, title, updated_at"
+                    " FROM anirss_links WHERE umo=? ORDER BY title",
+                    (umo,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT umo, ani_id, watch_id, sub_id, title, updated_at"
+                    " FROM anirss_links ORDER BY umo, title"
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        return await self._run(_work)
+
+    async def remember_anirss_link(
+        self, umo: str, ani_id: str, *, watch_id: int = 0, sub_id: int = 0, title: str = ""
+    ) -> None:
+        """记下「这条 ani-rss 订阅对应本地哪一行」。
+
+        「watch_id」/「sub_id」 传 0 表示这一侧没建（比如只同步追番、不同步 RSS），
+        已有的非零值不会被 0 覆盖，避免关掉某一侧同步时把记账擦掉。
+        """
+
+        if not umo or not ani_id:
+            return
+
+        def _work() -> None:
+            conn = self._connection()
+            conn.execute(
+                "INSERT INTO anirss_links(umo, ani_id, watch_id, sub_id, title, updated_at)"
+                " VALUES (?,?,?,?,?,?)"
+                " ON CONFLICT(umo, ani_id) DO UPDATE SET"
+                " watch_id=CASE WHEN excluded.watch_id=0 THEN anirss_links.watch_id"
+                " ELSE excluded.watch_id END,"
+                " sub_id=CASE WHEN excluded.sub_id=0 THEN anirss_links.sub_id"
+                " ELSE excluded.sub_id END,"
+                " title=excluded.title, updated_at=excluded.updated_at",
+                (umo, ani_id, int(watch_id), int(sub_id), title, time.time()),
+            )
+            conn.commit()
+
+        await self._run(_work)
+
+    async def forget_anirss_link(self, umo: str, ani_id: str) -> bool:
+        def _work() -> bool:
+            conn = self._connection()
+            cursor = conn.execute(
+                "DELETE FROM anirss_links WHERE umo=? AND ani_id=?", (umo, ani_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+        return await self._run(_work)
+
     # -- KV（缓存快照、上次运行时间等） --------------------------------------
 
     async def kv_get(self, key: str, default: Any = None) -> Any:
@@ -812,6 +912,7 @@ class Store:
                 ),
                 "sessions": count("SELECT COUNT(DISTINCT umo) FROM subscriptions"),
                 "history": count("SELECT COUNT(*) FROM push_history"),
+                "anirss_links": count("SELECT COUNT(*) FROM anirss_links"),
                 "db_bytes": size,
             }
 

@@ -1,8 +1,8 @@
 {
   "metadata": {
     "display_name": "番剧中枢",
-    "short_desc": "41 条指令 + Dashboard 面板的一站式番剧助手：查番、追番、订阅、播报、抽番。",
-    "desc": "把 Bangumi、bangumi-data、anime1.me、长门番堂、AGE 动漫、萌娘百科、Mikan 与 RSSHub 汇成一份跨源番剧索引：条目搜索与每日放送、季度新番表、追番清单与进度、RSS / Mikan 订阅推送、每日新番播报（可走 AstrBot 人格转述）、随机抽番与 AutoBangumi Webhook 接入，全部配六套高级卡片主题与 Dashboard 管理页。"
+    "short_desc": "42 条指令 + Dashboard 面板的一站式番剧助手：查番、追番、订阅、播报、抽番。",
+    "desc": "把 Bangumi、bangumi-data、anime1.me、长门番堂、AGE 动漫、萌娘百科、Mikan 与 RSSHub 汇成一份跨源番剧索引：条目搜索与每日放送、季度新番表、追番清单与进度、RSS / Mikan 订阅推送、每日新番播报（可走 AstrBot 人格转述）、随机抽番、本地 ani-rss 订阅同步与 AutoBangumi Webhook 接入，全部配六套高级卡片主题与 Dashboard 管理页。"
   },
   "config": {
     "card_theme": {
@@ -121,6 +121,10 @@
       "description": "播报在看人数下限",
       "hint": "0 表示不过滤。"
     },
+    "push_only_watchlist": {
+      "description": "每日播报只播我追的番",
+      "hint": "开启后，每日新番播报只保留出现在本会话追番表里的番，其余一律不列。适合「只想看自己在追的」；关闭则播当天全部新番。追番表为空时会跳过播报而不是发空卡。"
+    },
     "persona_reply_enabled": {
       "description": "通知走 AstrBot 人格转述",
       "hint": "开启后新番播报 / RSS 更新 / Webhook 通知会先让当前人格用自己的口吻说一句，再附上卡片一起发送。插件只提供任务指令，人格由 AstrBot 自身配置决定。"
@@ -162,6 +166,10 @@
     },
     "rss_history_days": {
       "description": "推送去重记录保留天数"
+    },
+    "rss_auto_progress": {
+      "description": "RSS 推送时自动回填追番进度",
+      "hint": "字幕组发布第 N 集并推送成功后，自动把追番表里对应那部的进度推到第 N 集。只往前推、不超过总集数、一部番只认标题最接近的那条记录；已弃坑的不动。"
     },
     "global_excludes": {
       "description": "全局排除项",
@@ -266,6 +274,50 @@
         "素笺 Paper",
         "落日 Sunset"
       ]
+    },
+    "anirss_enabled": {
+      "description": "启用 ani-rss 同步",
+      "hint": "把本地 ani-rss（下载器）里的订阅与下载进度同步进插件的追番表，省得在聊天里一部部「追番」。只读不回写，绝不改动 ani-rss 的配置。"
+    },
+    "anirss_base": {
+      "description": "ani-rss 地址",
+      "hint": "形如 http://192.168.1.10:7789 或 http://127.0.0.1:7789，默认端口 7789。末尾的 /api 可省略，会自动补。AstrBot 与 ani-rss 不在同一台机器时要填局域网/公网可达地址。"
+    },
+    "anirss_api_key": {
+      "description": "ani-rss API Key",
+      "hint": "ani-rss 设置页里的 API Key，优先使用。填了它就不用填账号密码。"
+    },
+    "anirss_username": {
+      "description": "ani-rss 用户名",
+      "hint": "没有 API Key 时的退路：用账号密码登录换 token。"
+    },
+    "anirss_password": {
+      "description": "ani-rss 密码",
+      "hint": "与用户名配套。ani-rss 的登录接口是明文提交，公网暴露时请优先用 API Key 并套 HTTPS。"
+    },
+    "anirss_sync_interval_minutes": {
+      "description": "自动同步间隔（分钟）",
+      "hint": "0 表示不自动同步，只在发「anirss sync」或在 WebUI 点按钮时同步。默认 60 分钟，上限 1440。"
+    },
+    "anirss_sync_targets": {
+      "description": "同步到哪些会话",
+      "hint": "追番表是按会话分开存的，所以必须指明同步进哪个会话，形如 aiocqhttp:GroupMessage:123456。同步结果播报也只发这些会话，不会混进 RSS 更新推送。留空则自动同步不会执行。"
+    },
+    "anirss_sync_watchlist": {
+      "description": "同步成追番记录",
+      "hint": "把 ani-rss 里的每部番写进追番表，并用它的下载集数回填进度（只往前推）。关掉就只做连接与查看，不落库。"
+    },
+    "anirss_sync_subscriptions": {
+      "description": "同时建立 RSS 订阅",
+      "hint": "默认关闭。ani-rss 自己已经在轮询这些 RSS 了，再让插件订阅一遍会收到重复通知；只有在「下载归 ani-rss、通知归 AstrBot」时才建议开。"
+    },
+    "anirss_notify_on_change": {
+      "description": "同步有变化时播报",
+      "hint": "新增追番、进度前进或有条目失联时，往上面的目标会话发一张同步账目卡。没变化时静默。"
+    },
+    "anirss_verify_tls": {
+      "description": "校验 ani-rss 的 HTTPS 证书",
+      "hint": "只有在用自签证书的反代时才需要关掉。走 http:// 时此项无影响。"
     }
   },
   "pages": {

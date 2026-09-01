@@ -1,8 +1,8 @@
 {
   "metadata": {
     "display_name": "Bangumi Nexus",
-    "short_desc": "An all-in-one anime companion: 41 chat commands plus a dashboard page for search, watchlists, feeds, broadcasts and gacha.",
-    "desc": "Bangumi Nexus merges Bangumi, bangumi-data, anime1.me, Nagato Bandou, AGE, Moegirlpedia, Mikan and RSSHub into one cross-source anime index: subject search and the daily calendar, season tables, watchlists with progress tracking, RSS and Mikan subscriptions, a scheduled new-episode broadcast that the AstrBot persona can narrate, random gacha picks and AutoBangumi webhook intake - all rendered with six polished card themes and managed from a dashboard page."
+    "short_desc": "An all-in-one anime companion: 42 chat commands plus a dashboard page for search, watchlists, feeds, broadcasts and gacha.",
+    "desc": "Bangumi Nexus merges Bangumi, bangumi-data, anime1.me, Nagato Bandou, AGE, Moegirlpedia, Mikan and RSSHub into one cross-source anime index: subject search and the daily calendar, season tables, watchlists with progress tracking, RSS and Mikan subscriptions, a scheduled new-episode broadcast that the AstrBot persona can narrate, random gacha picks, one-way sync from a local ani-rss instance and AutoBangumi webhook intake - all rendered with six polished card themes and managed from a dashboard page."
   },
   "config": {
     "card_theme": {
@@ -121,6 +121,10 @@
       "description": "Minimum watchers for the broadcast",
       "hint": "0 disables the filter."
     },
+    "push_only_watchlist": {
+      "description": "Broadcast only shows in my watchlist",
+      "hint": "When on, the daily broadcast keeps only titles present in this session's watchlist. If the watchlist is empty the broadcast is skipped instead of sending an empty card."
+    },
     "persona_reply_enabled": {
       "description": "Let the AstrBot persona narrate notifications",
       "hint": "When on, daily broadcasts, RSS updates and Webhook notifications first get one line in the voice of the active persona, sent together with the card. The plugin only supplies the task instruction; the persona itself comes from AstrBot."
@@ -162,6 +166,10 @@
     },
     "rss_history_days": {
       "description": "Days to keep deduplication records"
+    },
+    "rss_auto_progress": {
+      "description": "Backfill watch progress from RSS pushes",
+      "hint": "After episode N is pushed successfully, move the matching watchlist entry to episode N. Forward only, capped by total episodes, one best-matching entry per title; dropped titles are left alone."
     },
     "global_excludes": {
       "description": "Global exclusions",
@@ -266,6 +274,50 @@
         "Paper",
         "Sunset"
       ]
+    },
+    "anirss_enabled": {
+      "description": "Enable ani-rss sync",
+      "hint": "Pull subscriptions and download progress from a local ani-rss instance into the plugin watchlist. Read-only: it never writes back to ani-rss."
+    },
+    "anirss_base": {
+      "description": "ani-rss address",
+      "hint": "For example http://192.168.1.10:7789 (default port 7789). A trailing /api can be omitted. Must be reachable from the machine running AstrBot."
+    },
+    "anirss_api_key": {
+      "description": "ani-rss API key",
+      "hint": "Found in the ani-rss settings page. Preferred over username/password."
+    },
+    "anirss_username": {
+      "description": "ani-rss username",
+      "hint": "Fallback when no API key is available: log in to exchange for a token."
+    },
+    "anirss_password": {
+      "description": "ani-rss password",
+      "hint": "Goes with the username. ani-rss posts credentials in plain text, so prefer an API key over HTTPS when exposed to the internet."
+    },
+    "anirss_sync_interval_minutes": {
+      "description": "Automatic sync interval (minutes)",
+      "hint": "0 disables automatic sync, leaving only the «anirss sync» command and the WebUI button. Default 60, maximum 1440."
+    },
+    "anirss_sync_targets": {
+      "description": "Sessions to sync into",
+      "hint": "Watchlists are stored per session, so the target must be explicit, e.g. aiocqhttp:GroupMessage:123456. Sync reports also go only to these sessions. Empty means automatic sync does nothing."
+    },
+    "anirss_sync_watchlist": {
+      "description": "Sync into watchlist entries",
+      "hint": "Write every ani-rss title into the watchlist and backfill progress from its downloaded episode count (forward only)."
+    },
+    "anirss_sync_subscriptions": {
+      "description": "Also create RSS subscriptions",
+      "hint": "Off by default. ani-rss already polls those feeds, so subscribing again causes duplicate notifications; only enable it when downloads stay in ani-rss but notifications should come from AstrBot."
+    },
+    "anirss_notify_on_change": {
+      "description": "Report when a sync changes something",
+      "hint": "Sends a summary card to the target sessions when titles are added, progress moves forward, or entries go missing. Silent when nothing changed."
+    },
+    "anirss_verify_tls": {
+      "description": "Verify the ani-rss HTTPS certificate",
+      "hint": "Only turn this off for a self-signed reverse proxy. It has no effect over plain http://."
     }
   },
   "pages": {

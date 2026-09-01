@@ -968,6 +968,12 @@ input[type="range"]::-moz-range-thumb {
   font-weight: 600;
 }
 
+/* 配置文件不可写时的开关：状态照样看得清，但点不动。 */
+.switch.is-locked {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .segmented {
   display: inline-flex;
   gap: 2px;

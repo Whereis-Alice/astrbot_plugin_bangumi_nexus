@@ -24,6 +24,7 @@ const VIEWS = [
   { key: "watch", icon: "heart", label: "追番", tip: "按会话管理追番进度与评分" },
   { key: "subs", icon: "rss", label: "订阅", tip: "RSS 订阅增删、测试与导入导出" },
   { key: "targets", icon: "bell", label: "播报", tip: "每日新番播报目标与手动触发" },
+  { key: "anirss", icon: "sync", label: "同步", tip: "把本地 ani-rss 的订阅与下载进度同步进追番表" },
   { key: "cards", icon: "cards", label: "卡片", tip: "主题 × 卡片类型的真实渲染预览" },
   { key: "sources", icon: "source", label: "数据源", tip: "八个上游数据源的健康体检" },
   { key: "commands", icon: "commands", label: "指令", tip: "全部聊天指令速查表" },
@@ -76,6 +77,8 @@ const state = {
   subDraft: { value: "", name: "" },
   targets: null,
   targetsDraft: null,
+  anirss: null,
+  anirssDraft: null,
   cards: { kind: "help", renderer: "", shots: new Map(), busy: new Set() },
   probes: null,
   search: { keyword: "", items: [], busy: false },
@@ -618,12 +621,13 @@ function segmented(options, current, act) {
   );
 }
 
-function switchHtml(text, checked, { act = "", arg = "", name = "" } = {}) {
+function switchHtml(text, checked, { act = "", arg = "", name = "", disabled = false } = {}) {
   return (
-    `<label class="switch"><input type="checkbox"${checked ? " checked" : ""}` +
+    `<label class="switch${disabled ? " is-locked" : ""}"><input type="checkbox"${checked ? " checked" : ""}` +
     (act ? ` data-act="${attr(act)}"` : "") +
     (arg ? ` data-arg="${attr(arg)}"` : "") +
     (name ? ` data-name="${attr(name)}"` : "") +
+    (disabled ? " disabled" : "") +
     `/><span class="switch-track"></span><span class="switch-text">${esc(text)}</span></label>`
   );
 }
@@ -658,6 +662,17 @@ async function loadWatch() {
 
 async function loadSubs() {
   state.subs = await apiGet("subs", { umo: state.umo });
+}
+
+/**
+ * ani-rss 同步面板的数据。
+ *
+ * 刻意不做缓存：后端每次都会真的去连一趟本地 ani-rss，面板打开那一刻要看到的是
+ * 「现在通不通」，而不是上次打开时的结论 —— 用户来这一页多半就是因为怀疑它没通。
+ */
+async function loadAnirss() {
+  state.anirss = await apiGet("anirss");
+  state.anirssDraft = (state.anirss?.targets || []).join("\n");
 }
 
 /**
@@ -707,6 +722,10 @@ const LOADERS = {
     await ensureSessions();
     state.targets = await apiGet("targets");
     state.targetsDraft = (state.targets.configured || []).join("\n");
+  },
+  anirss: async () => {
+    await ensureSessions();
+    await loadAnirss();
   },
   sources: async () => {
     if (!state.overview) await loadOverview();
@@ -1044,6 +1063,7 @@ const GROUP_ICON = {
   rss: "rss",
   webhook: "link",
   anime1: "tv",
+  anirss: "sync",
   delivery: "upload",
   misc: "config",
   other: "config",
@@ -1734,6 +1754,243 @@ RENDERERS.targets = () => {
     `<div class="deck wide">${configuredPanel}${effectivePanel}${manualPanel}</div>`
   );
 };
+/* --- 视图：ani-rss 同步 --------------------------------------------------- */
+
+// 鉴权方式的中文说法必须和服务层的 AUTH_LABEL 一致：同一件事在指令回执里叫
+// 「API Key」、在面板里换个叫法，用户会以为是两套互不相干的配置。
+const ANIRSS_AUTH_LABEL = { api_key: "API Key", password: "账号密码", none: "未设置" };
+
+// isoweekday → 中文。ani-rss 认不出播出日时给 0，这里就查不到，界面上直接不显示。
+const WEEKDAY_LABEL = Object.fromEntries(WEEKDAY_OPTIONS.slice(1));
+
+// 同步范围的四个开关：[配置键, 状态字段, 标题, 解释]。
+// 配置键和状态字段名字不一样（一个是 anirss_enabled、一个是 enabled），
+// 放同一张表里渲染与保存共用，分两处写迟早会漏改一处。
+const ANIRSS_FLAGS = [
+  ["anirss_enabled", "enabled", "定时同步", "关掉之后这一页的「立即同步」照样能点，只是不再自动跑。"],
+  ["anirss_sync_watchlist", "sync_watchlist", "写进追番表", "ani-rss 的一条订阅对应追番表里的一行，下载到第几集就回填成看到第几集。"],
+  ["anirss_sync_subscriptions", "sync_subscriptions", "顺带建 RSS 订阅", "默认关：ani-rss 已经在下载了，再让插件推同一集多半只是刷屏。"],
+  ["anirss_notify_on_change", "notify_on_change", "有变化才播报", "只在真的新增 / 更新 / 建订阅时发账目卡，两边没差异就不打扰。"],
+];
+
+/** ani-rss 里的一条订阅。「已认领」= 本地追番表里已经有它对应的那一行。 */
+function anirssRow(item, claimed) {
+  const progress =
+    Number(item.total) > 0
+      ? num(item.progress) + " / " + num(item.total) + " 集"
+      : num(item.progress) + " 集";
+  const facts = [
+    item.subgroup ? "字幕组 " + item.subgroup : "",
+    item.subject_id ? "bgm " + item.subject_id : "",
+    WEEKDAY_LABEL[String(item.weekday || "")] || "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    `<div class="list-row${item.enabled ? "" : " is-off"}">` +
+    `<div class="list-main">` +
+    `<span class="list-title"><span class="text">${esc(item.title)}</span>` +
+    (claimed ? badge("已认领", "ok") : badge("待同步", "accent")) +
+    (item.enabled ? "" : badge("已停用", "warn")) +
+    (item.completed ? badge("已完结") : "") +
+    `</span>` +
+    (item.summary ? `<span class="list-sub">${esc(item.summary)}</span>` : "") +
+    (facts ? `<span class="list-sub">${esc(facts)}</span>` : "") +
+    `</div>` +
+    `<div class="list-actions">` +
+    badge(progress) +
+    (item.url
+      ? `<a class="icon-btn xs" href="${attr(item.url)}" target="_blank" rel="noopener noreferrer" title="打开这条订阅的 RSS 地址">${icon("link", "sm")}</a>`
+      : "") +
+    `</div></div>`
+  );
+}
+
+RENDERERS.anirss = () => {
+  const data = state.anirss;
+  if (!data) return viewbar("同步", "正在连接本地 ani-rss…") + skeletonDeck(3);
+
+  const items = Array.isArray(data.items) ? data.items : [];
+  const claimed = new Set((data.links || []).map((row) => String(row.ani_id)));
+  const baseline = (data.targets || []).join("\n");
+  const draft = state.anirssDraft ?? baseline;
+  const dirty = draft !== baseline;
+  const writable = data.writable !== false;
+  const auth = ANIRSS_AUTH_LABEL[String(data.auth || "none")] || "未设置";
+  const last = data.last_result || {};
+
+  const connectionPanel = panel({
+    eyebrow: "connection",
+    title: "本地 ani-rss",
+    desc: "同步是单向的：插件只读 ani-rss，永远不回写。下载器里的配置是你的资产，同步没资格改它。",
+    actions:
+      btn("测试连接", { act: "anirss-test", glyph: "stethoscope", sm: true }) +
+      btn("立即同步", {
+        act: "anirss-sync",
+        glyph: "sync",
+        kind: "primary",
+        sm: true,
+        disabled: !data.configured,
+      }),
+    body:
+      `<div class="metrics">` +
+      metric("定时同步", data.enabled ? "已开启" : "已关闭", {
+        tone: data.enabled ? "ok" : "warn",
+        small: true,
+        foot: Number(data.interval) > 0 ? "每 " + num(data.interval) + " 分钟一次" : "间隔为 0，只在手点时同步",
+      }) +
+      metric("连接", data.ok ? "正常" : data.configured ? "连不上" : "未配置", {
+        tone: data.ok ? "ok" : data.configured ? "err" : "warn",
+        small: true,
+        glyph: "link",
+        foot: "鉴权：" + auth + (data.token_cached ? "（票据已缓存）" : ""),
+      }) +
+      metric("对方条目", num(data.total || items.length), {
+        glyph: "library",
+        foot: "启用中 " + num(data.active || 0),
+      }) +
+      metric("已认领", num(data.synced || 0), {
+        glyph: "heart",
+        foot: data.last_at ? "上次同步 " + relative(data.last_at) : "还没同步过",
+      }) +
+      `</div>` +
+      kv([
+        ["地址", data.base || "（未设置）"],
+        ["校验 HTTPS 证书", data.verify_tls === false ? "已关闭（只在自签证书时这么设）" : "开启"],
+        ["同步方向", "ani-rss → 番剧中枢（只读）"],
+      ]) +
+      (data.configured
+        ? ""
+        : note("还没填 ani-rss 地址。去「配置 → ani-rss 同步」填 anirss_base，再配 API Key 或账号密码。", "warn")) +
+      (data.configured && data.error ? note(String(data.error), "danger") : ""),
+  });
+
+  const targetsPanel = panel({
+    eyebrow: "targets",
+    title: "同步到哪些会话",
+    desc: "每行一个会话 ID。这一条是独立的推送链：只发同步账目，不会混进 RSS 更新那条链里。",
+    body:
+      `<div class="field">` +
+      `<textarea rows="5" placeholder="aiocqhttp:FriendMessage:10000" data-live="anirss-targets-draft">${esc(draft)}</textarea>` +
+      `<span class="field-hint">这里同时决定「写进谁的追番表」：ani-rss 是一台机器上的下载器，进度理应只落到你自己的会话。留空则同步不会执行。</span>` +
+      `</div>` +
+      `<div class="row">` +
+      btn("保存目标", {
+        act: "anirss-targets-save",
+        glyph: "save",
+        kind: "primary",
+        sm: true,
+        disabled: !dirty || !writable,
+      }) +
+      btn("放弃改动", { act: "anirss-targets-reset", glyph: "close", kind: "ghost", sm: true, disabled: !dirty }) +
+      (dirty ? badge("有未保存的改动", "accent") : "") +
+      `</div>`,
+    foot: state.sessions.length
+      ? `<div class="chips">` +
+        state.sessions
+          .map((row) =>
+            btn(shortUmo(row.umo), {
+              act: "anirss-targets-append",
+              arg: row.umo,
+              glyph: "plus",
+              sm: true,
+              kind: "ghost",
+              title: row.umo,
+            }),
+          )
+          .join("") +
+        `</div>`
+      : note("插件还没在任何聊天窗口里见过消息，所以暂时没有可挑的会话。"),
+  });
+
+  const scopePanel = panel({
+    eyebrow: "scope",
+    title: "同步范围",
+    desc: "这几项直接写插件配置，改完立刻生效，不用再去配置页点保存。",
+    body:
+      `<div class="chips">` +
+      ANIRSS_FLAGS.map(([key, field, label]) =>
+        switchHtml(label, data[field] === true, { act: "anirss-flag", arg: key, disabled: !writable }),
+      ).join("") +
+      `</div>` +
+      `<div class="row" style="margin-top:var(--gap)">` +
+      `<span class="field-hint">自动同步间隔（分钟）</span>` +
+      `<input type="number" min="0" max="1440" step="5" style="width:96px" value="${attr(Number(data.interval) || 0)}" data-act="anirss-interval" title="0 表示不自动同步，只在这里手点" ${writable ? "" : "disabled"}/>` +
+      `</div>` +
+      `<div class="notes" style="margin-top:var(--gap)">` +
+      ANIRSS_FLAGS.map(([, , label, hint]) => note(label + "：" + hint)).join("") +
+      `</div>` +
+      (writable
+        ? ""
+        : note("当前运行环境不允许插件写配置文件，这一页的开关只能看不能改 —— 请去 AstrBot 自带的插件配置页修改。", "danger")),
+  });
+
+  const itemsPanel = panel({
+    eyebrow: "entries",
+    title: "ani-rss 里的订阅",
+    desc: "同步只做两件事：本地没有的补上、进度往前推。ani-rss 里删掉的条目这边只报「已失联」，绝不自动删。",
+    body: items.length
+      ? `<div class="list">${items.map((row) => anirssRow(row, claimed.has(String(row.ani_id)))).join("")}</div>`
+      : emptyState(
+          data.ok ? "ani-rss 里还没有订阅" : "读不到 ani-rss 的订阅列表",
+          data.ok
+            ? "先在本地 ani-rss 里订几部番，再回来点「立即同步」。"
+            : "按上面的提示把地址和凭据配好，然后点「测试连接」确认能通。",
+          "",
+          "sync",
+        ),
+    foot: items.length ? badge("共 " + num(items.length) + " 条 · 已认领 " + num(claimed.size)) : "",
+  });
+
+  const buckets = [
+    ["新增追番", last.added],
+    ["进度更新", last.updated],
+    ["新建订阅", last.subscribed],
+    ["已失联", last.orphans],
+    ["失败", last.failures],
+  ].filter(([, rows]) => Array.isArray(rows) && rows.length);
+
+  const reportPanel = panel({
+    eyebrow: "report",
+    title: "上次同步的账目",
+    desc: "「已失联」是 ani-rss 里已经没有、本地却还留着的条目。删不删由你决定，插件不替你做不可逆的事。",
+    body: buckets.length
+      ? buckets
+          .map(
+            ([label, rows]) =>
+              `<div class="field" style="margin-top:var(--gap)"><span class="field-label">${esc(label)}${badge(String(rows.length))}</span>` +
+              `<div class="chips">${rows.map((row) => chip(String(row))).join("")}</div></div>`,
+          )
+          .join("")
+      : emptyState(
+          data.last_at ? "上次同步没有任何变化" : "还没跑过同步",
+          data.last_at
+            ? "两边已经对齐了，这是正常状态。"
+            : "配好之后点一次「立即同步」，这里会列出到底动了哪些条目。",
+          "",
+          "check",
+        ),
+    foot: data.last_at
+      ? badge("同步于 " + clock(data.last_at)) +
+        badge("读到 " + num(last.active || 0) + " 条启用中") +
+        badge("落到 " + num((last.sessions || []).length) + " 个会话")
+      : "",
+  });
+
+  return (
+    viewbar(
+      "同步",
+      data.configured
+        ? data.ok
+          ? num(items.length) + " 条 ani-rss 订阅 · 已认领 " + num(data.synced || 0)
+          : "连不上本地 ani-rss"
+        : "还没配置 ani-rss",
+      btn("刷新", { act: "reload", glyph: "refresh", sm: true, kind: "ghost" }),
+    ) +
+    `<div class="deck wide">${connectionPanel}${targetsPanel}${scopePanel}${itemsPanel}${reportPanel}</div>`
+  );
+};
 /* --- 视图：卡片预览 ------------------------------------------------------- */
 
 // 预览缓存的键要把「主题 × 卡片类型 × 渲染器」三者都算进去，
@@ -2265,6 +2522,21 @@ async function exportTo(umo) {
  * 重渲染会把 textarea 换成新节点，用户正在打的字和光标都会丢，
  * 所以这里只改按钮的 disabled 状态。
  */
+/**
+ * ani-rss 面板上的开关 / 间隔直接写插件配置。
+ *
+ * 写完必须把配置页的草稿和缓存一起作废：两页读的是同一份配置，
+ * 只刷新其中一页的话，另一页会拿着旧值再存一次、把这里的改动顶掉。
+ */
+async function anirssWriteConfig(patch, ok = "已保存") {
+  await apiPost("config", { patch });
+  state.configDraft.clear();
+  VIEW_LOADED.delete("config");
+  toast(ok, "ok", 2600);
+  await loadView("anirss", { force: true });
+  await touchOverview();
+}
+
 function syncTargetButtons() {
   const baseline = (state.targets?.configured || []).join("\n");
   const dirty = (state.targetsDraft ?? baseline) !== baseline;
@@ -2274,6 +2546,19 @@ function syncTargetButtons() {
     const node = $(`[data-act="${act}"]`, host);
     if (node) node.disabled = !dirty;
   });
+}
+
+/** 同理：ani-rss 的目标文本框也只同步按钮状态，不整块重渲染。 */
+function syncAnirssButtons() {
+  const baseline = (state.anirss?.targets || []).join("\n");
+  const dirty = (state.anirssDraft ?? baseline) !== baseline;
+  const writable = state.anirss?.writable !== false;
+  const host = $(`.view[data-view="anirss"]`);
+  if (!host) return;
+  const save = $(`[data-act="anirss-targets-save"]`, host);
+  const reset = $(`[data-act="anirss-targets-reset"]`, host);
+  if (save) save.disabled = !dirty || !writable;
+  if (reset) reset.disabled = !dirty;
 }
 
 /** 同理：配置页的文本框每敲一个字都重渲染会丢焦点，只同步按钮与计数徽标。 */
@@ -2662,6 +2947,95 @@ const ACTIONS = {
     render();
   },
 
+  /* — ani-rss 同步 — */
+  "anirss-test": async () => {
+    const result = await apiPost("anirss/test", {});
+    if (result?.ok) {
+      toast(
+        "连上了：共 " + num(result.total || result.entries || 0) + " 条订阅，启用中 " + num(result.active || 0),
+        "ok",
+        6000,
+      );
+    } else {
+      toast("连不上：" + (result?.error || "未知原因"), "err", 7000);
+    }
+    await loadView("anirss", { force: true });
+  },
+
+  // 手点同步默认 force：会先让 ani-rss 重扫一遍 RSS。手点的人通常刚在下载器里
+  // 加完订阅，若等它自己轮询，看到「没有变化」会以为同步坏了。
+  "anirss-sync": async () => {
+    const result = await apiPost("anirss/sync", { targets: [], force: true });
+    if (!result?.ok) {
+      toast("同步没跑起来：" + (result?.error || "未知原因"), "err", 7000);
+    } else {
+      const parts = [
+        ["新增", result.added],
+        ["更新", result.updated],
+        ["建订阅", result.subscribed],
+        ["失联", result.orphans],
+        ["失败", result.failures],
+      ]
+        .filter(([, rows]) => Array.isArray(rows) && rows.length)
+        .map(([label, rows]) => label + " " + num(rows.length));
+      toast(
+        "读到 " + num(result.active || 0) + " 条启用中的订阅" + (parts.length ? "：" + parts.join(" · ") : "，两边已经对齐"),
+        "ok",
+        6000,
+      );
+    }
+    // 同步会动追番表和订阅表，这两页的缓存必须作废，否则切过去还是旧数字。
+    VIEW_LOADED.delete("watch");
+    VIEW_LOADED.delete("subs");
+    await loadView("anirss", { force: true });
+    await touchOverview();
+  },
+
+  "anirss-targets-save": async () => {
+    const targets = String(state.anirssDraft || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    await anirssWriteConfig(
+      { anirss_sync_targets: targets },
+      "已保存 " + num(targets.length) + " 个同步目标",
+    );
+  },
+
+  "anirss-targets-reset": () => {
+    state.anirssDraft = (state.anirss?.targets || []).join("\n");
+    render("anirss");
+  },
+
+  "anirss-targets-append": (arg) => {
+    const lines = String(state.anirssDraft || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.includes(arg)) {
+      toast("这个会话已经在列表里了", "info");
+      return;
+    }
+    lines.push(arg);
+    state.anirssDraft = lines.join("\n");
+    render("anirss");
+  },
+
+  // arg 是配置键名。这里对着白名单核一遍：data-arg 是渲染时拼进 HTML 的，
+  // 万一哪天改错了字，直接把任意键写进配置比静默失败更糟。
+  "anirss-flag": async (arg, node) => {
+    if (!ANIRSS_FLAGS.some(([key]) => key === arg)) return;
+    await anirssWriteConfig({ [arg]: !!node?.checked });
+  },
+
+  "anirss-interval": async (arg, node) => {
+    const minutes = Math.max(0, Math.min(1440, intValue(node)));
+    await anirssWriteConfig(
+      { anirss_sync_interval_minutes: minutes },
+      minutes > 0 ? "每 " + num(minutes) + " 分钟同步一次" : "已改为只手动同步",
+    );
+  },
+
   /* — 卡片预览 — */
   "card-kind": async (arg) => {
     if (!KIND_LABEL[arg] && arg) return;
@@ -2798,6 +3172,10 @@ const LIVE_SETTERS = {
   "targets-draft": (value) => {
     state.targetsDraft = value;
     syncTargetButtons();
+  },
+  "anirss-targets-draft": (value) => {
+    state.anirssDraft = value;
+    syncAnirssButtons();
   },
   "cmd-filter": (value) => {
     state.cmdFilter = value;

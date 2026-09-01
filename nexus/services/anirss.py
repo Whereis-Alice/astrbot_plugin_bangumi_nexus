@@ -402,6 +402,9 @@ class AniRssSyncService:
             (str(row["title"]), str(row["summary"]), _tail(row)) for row in items[:LIST_LIMIT]
         ]
         status = dict(payload)
+        # 离线导入也会写 「last_at」，标签跟着来路走，免得让人以为在线同步曾经通过。
+        origin = str((payload.get("last_result") or {}).get("origin") or "同步")
+        status["last_label"] = f"上次{origin}"
         status["last_at_label"] = _stamp(float(payload.get("last_at") or 0.0))
         status["direction"] = _direction(conf)
         status["targets_label"] = "、".join(conf.anirss_sync_targets) or "未指定"
@@ -510,12 +513,24 @@ def _stamp(moment: float) -> str:
 def _plain(status: dict[str, Any], entries: list[tuple[str, str, str]], total: int) -> str:
     head = "ani-rss 同步"
     if not status.get("configured"):
-        return head + "\n还没配置地址或密钥，去 WebUI 的「ani-rss 同步」板块填一下。"
+        tail = (
+            f"\n{status.get('last_label') or '上次同步'} {status.get('last_at_label')}"
+            f"，已认领 {status.get('synced') or 0} 条。"
+            if status.get("last_at")
+            else ""
+        )
+        return (
+            head
+            + "\n还没配置地址或密钥，去 WebUI 的「ani-rss 同步」板块填一下；"
+            + "连不上也可以在那里用「离线导入」。"
+            + tail
+        )
     if not status.get("ok"):
         return head + f"\n连不上 {status.get('base')}：{status.get('error') or '未知原因'}"
     lines = [
         f"{head}（{status.get('base')}）",
-        f"共 {total} 条，上次同步 {status.get('last_at_label') or '还没同步过'}",
+        f"共 {total} 条，{status.get('last_label') or '上次同步'} "
+        f"{status.get('last_at_label') or '还没同步过'}",
     ]
     lines.extend(
         f"{index}. {title} · {note}" + (f" · {tail}" if tail else "")

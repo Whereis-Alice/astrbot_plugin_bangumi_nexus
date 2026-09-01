@@ -547,3 +547,18 @@ class Test来路会被标出来:
         assert "离线导入" in notification.title
         assert targets == (UMO,)
         assert notification.kind == "anirss_sync"
+
+    async def test_卡片标签跟着来路变(self, store: Store) -> None:
+        """在线同步从来没通过、只用过离线导入的人，卡上不该写「上次同步」。"""
+
+        service, _ = _service(store, AniRssSnapshot(), configured=False)
+        await service.import_snapshot(RAW_EXPORT)
+        reply = await service.card(UMO)
+        assert "上次离线导入" in reply.text
+        assert "离线导入" in (reply.card.html if reply.card else "")
+
+    async def test_没配也没导入过就只提示去配(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot(), configured=False)
+        reply = await service.card(UMO)
+        assert "离线导入" in reply.text
+        assert "上次" not in reply.text

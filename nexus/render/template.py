@@ -1461,7 +1461,10 @@ def build_anirss_card(
     )
     facts = _kv(
         [
-            ("上次同步", str(status.get("last_at_label") or "还没同步过")),
+            (
+                str(status.get("last_label") or "上次同步"),
+                str(status.get("last_at_label") or "还没同步过"),
+            ),
             ("同步方向", str(status.get("direction") or "")),
             ("推送会话", str(status.get("targets_label") or "未指定")),
             ("提示", str(status.get("note") or "")),
@@ -1471,7 +1474,7 @@ def build_anirss_card(
     listing = _rows(rows) or _empty(
         "没读到订阅 —— 确认 ani-rss 已启动，端口和密钥填对了"
         if configured
-        else "先在配置里填 ani-rss 地址和密钥"
+        else "填 ani-rss 地址和密钥，或者在管理页用「离线导入」把导出的 JSON 搬过来"
     )
     body = (
         '<div class="body">'

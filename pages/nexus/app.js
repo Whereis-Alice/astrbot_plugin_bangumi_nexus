@@ -1825,6 +1825,8 @@ RENDERERS.anirss = () => {
   const writable = data.writable !== false;
   const auth = ANIRSS_AUTH_LABEL[String(data.auth || "none")] || "未设置";
   const last = data.last_result || {};
+  // 离线导入与在线同步共用这块账目，标题得跟着来路走，否则用户会以为「同步」偷偷成功过。
+  const lastOrigin = String(last.origin || "同步");
 
   const connectionPanel = panel({
     eyebrow: "connection",
@@ -1858,7 +1860,7 @@ RENDERERS.anirss = () => {
       }) +
       metric("已认领", num(data.synced || 0), {
         glyph: "heart",
-        foot: data.last_at ? "上次同步 " + relative(data.last_at) : "还没同步过",
+        foot: data.last_at ? "上次" + lastOrigin + " " + relative(data.last_at) : "还没同步过",
       }) +
       `</div>` +
       kv([
@@ -1868,7 +1870,11 @@ RENDERERS.anirss = () => {
       ]) +
       (data.configured
         ? ""
-        : note("还没填 ani-rss 地址。去「配置 → ani-rss 同步」填 anirss_base，再配 API Key 或账号密码。", "warn")) +
+        : note(
+            "还没填 ani-rss 地址。去「配置 → ani-rss 同步」填 anirss_base，再配 API Key 或账号密码。" +
+              "连不上（例如 ani-rss 在自己电脑、AstrBot 在公网服务器）就用下面的「离线导入」，效果一样。",
+            "warn",
+          )) +
       (data.configured && data.error ? note(String(data.error), "danger") : ""),
   });
 
@@ -1989,7 +1995,7 @@ RENDERERS.anirss = () => {
 
   const reportPanel = panel({
     eyebrow: "report",
-    title: "上次同步的账目",
+    title: "上次" + lastOrigin + "的账目",
     desc: "「已失联」是 ani-rss 里已经没有、本地却还留着的条目。删不删由你决定，插件不替你做不可逆的事。",
     body: buckets.length
       ? buckets
@@ -2000,15 +2006,15 @@ RENDERERS.anirss = () => {
           )
           .join("")
       : emptyState(
-          data.last_at ? "上次同步没有任何变化" : "还没跑过同步",
+          data.last_at ? "上次" + lastOrigin + "没有任何变化" : "还没同步过，也没导入过",
           data.last_at
             ? "两边已经对齐了，这是正常状态。"
-            : "配好之后点一次「立即同步」，这里会列出到底动了哪些条目。",
+            : "点一次「立即同步」或用「离线导入」，这里会列出到底动了哪些条目。",
           "",
           "check",
         ),
     foot: data.last_at
-      ? badge("同步于 " + clock(data.last_at)) +
+      ? badge(lastOrigin + "于 " + clock(data.last_at)) +
         badge("读到 " + num(last.active || 0) + " 条启用中") +
         badge("落到 " + num((last.sessions || []).length) + " 个会话")
       : "",
@@ -2021,7 +2027,9 @@ RENDERERS.anirss = () => {
         ? data.ok
           ? num(items.length) + " 条 ani-rss 订阅 · 已认领 " + num(data.synced || 0)
           : "连不上本地 ani-rss"
-        : "还没配置 ani-rss",
+        : Number(data.synced) > 0
+          ? "离线导入 · 已认领 " + num(data.synced) + " 条"
+          : "还没配置 ani-rss",
       btn("刷新", { act: "reload", glyph: "refresh", sm: true, kind: "ghost" }),
     ) +
     `<div class="deck wide">${connectionPanel}${targetsPanel}${importPanel}${scopePanel}${itemsPanel}${reportPanel}</div>`

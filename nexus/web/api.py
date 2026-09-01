@@ -870,6 +870,18 @@ class NexusService:
             raise NexusWebError("同步服务未装配")
         return await service.test()
 
+    async def anirss_import(self, payload: Any, targets: Sequence[Any] = ()) -> dict[str, Any]:
+        """WebUI 点「离线导入」：直接吃一份粘贴进来的 「listAni」 响应。
+
+        走这条路时插件完全不需要能访问到 ani-rss —— 家里电脑上的下载器不用暴露端口。
+        """
+
+        service = self._wiring.anirss
+        if service is None:
+            raise NexusWebError("同步服务未装配")
+        picked = tuple(str(item).strip() for item in targets or () if str(item).strip())
+        return await service.import_snapshot(payload, targets=picked)
+
     # -- 诊断 / 娱乐 / 搜索 ------------------------------------------------
     async def diagnose(self) -> dict[str, Any]:
         probes = await self._wiring.diagnostics.run_probes()
@@ -1397,6 +1409,12 @@ class NexusWebApi:
             (prefix + "/anirss", self.get_anirss, ["GET"], label + "ani-rss 同步状态"),
             (prefix + "/anirss/sync", self.post_anirss_sync, ["POST"], label + "立即同步 ani-rss"),
             (prefix + "/anirss/test", self.post_anirss_test, ["POST"], label + "测试 ani-rss 连接"),
+            (
+                prefix + "/anirss/import",
+                self.post_anirss_import,
+                ["POST"],
+                label + "离线导入 ani-rss 快照",
+            ),
             (prefix + "/diagnose", self.get_diagnose, ["GET"], label + "数据源体检"),
             (
                 prefix + "/webhook/test",
@@ -1597,6 +1615,22 @@ class NexusWebApi:
 
     async def post_anirss_test(self) -> Any:
         return await self._guard(lambda: self._wrap(self._service.anirss_test()))
+
+    async def post_anirss_import(self) -> Any:
+        async def run() -> Any:
+            body = await _json_body()
+            targets = body.get("targets") or ()
+            if isinstance(targets, (str, bytes)):
+                raise NexusWebError("同步目标必须是一个列表")
+            # 「payload」 允许直接是 JSON 文本（前端文本框原样提交），也允许是解析好的对象。
+            payload = body.get("payload")
+            if payload is None:
+                payload = body.get("text")
+            if payload is None:
+                raise NexusWebError("请把 ani-rss 导出的 JSON 放在 「payload」 字段里")
+            return _json(await self._service.anirss_import(payload, targets))
+
+        return await self._guard(run)
 
     async def get_diagnose(self) -> Any:
         return await self._guard(lambda: self._wrap(self._service.diagnose()))

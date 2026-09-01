@@ -221,3 +221,46 @@ class Test全局层与同集归并回显:
         applied = store.applied[0][1]
         assert "1280x720" in applied
         assert not [word for word in applied if "batch" in word.lower()]
+
+
+class _FakeAnirss:
+    """记录 「import_snapshot」 收到什么的假同步服务。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, tuple[str, ...]]] = []
+
+    async def import_snapshot(self, raw: Any, *, targets: tuple[str, ...] = ()) -> dict[str, Any]:
+        self.calls.append((raw, targets))
+        return {"ok": True, "origin": "离线导入", "entries": 1}
+
+
+def _anirss_service(anirss: Any) -> NexusService:
+    """只够跑离线导入这一个接口的 「NexusService」。"""
+
+    deps = SimpleNamespace(
+        store=_FakeStore(),
+        conf=SimpleNamespace(),
+        activity=SimpleNamespace(info=lambda *a, **k: None),
+    )
+    return NexusService(cast(Any, deps), cast(Any, SimpleNamespace(anirss=anirss)))
+
+
+class Test离线导入接口:
+    """WebUI 粘一份 JSON 进来时，这一层只负责转交与清洗会话列表。"""
+
+    async def test_原样把文本交给同步服务(self) -> None:
+        """故意不在这里 「json.loads」：错法的分类和文案都归服务层，两处各判一次必然走偏。"""
+
+        fake = _FakeAnirss()
+        result = await _anirss_service(fake).anirss_import('{"code":200}')
+        assert result["ok"] is True
+        assert fake.calls == [('{"code":200}', ())]
+
+    async def test_会话列表会去掉空白项(self) -> None:
+        fake = _FakeAnirss()
+        await _anirss_service(fake).anirss_import({"code": 200}, ["  a  ", "", "   ", "b"])
+        assert fake.calls[0][1] == ("a", "b")
+
+    async def test_没装配同步服务时报可读错误(self) -> None:
+        with pytest.raises(NexusWebError):
+            await _anirss_service(None).anirss_import("{}")

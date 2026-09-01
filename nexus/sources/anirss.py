@@ -218,6 +218,27 @@ def parse_entry(raw: Any) -> AniEntry | None:
     )
 
 
+def unwrap_payload(raw: Any) -> Any:
+    """把「手动导出的 「listAni」 响应」剥成 「parse_snapshot」 认得的 「data」。
+
+    离线导入时用户存下来的通常是整个包封 「{code, message, data, t}」，
+    但也有人直接把 「data」 那一层抠出来贴过来。两种都得认，否则「导入没反应」
+    这种最没信息量的失败会反复发生。判据是「有 weekList 就是 data 本身」。
+    """
+
+    if not isinstance(raw, dict):
+        return raw
+    if "weekList" in raw:
+        return raw
+    if "data" in raw:
+        code = _as_int(raw.get("code"), 200)
+        if not 200 <= code < 300:
+            message = str(raw.get("message") or "").strip() or f"错误码 {code}"
+            raise AniRssError(f"这份导出本身就是失败响应：{message}", status=code)
+        return raw.get("data")
+    return raw
+
+
 def parse_snapshot(data: Any) -> AniRssSnapshot:
     """解析 「listAni」 的 「data」。
 

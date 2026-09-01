@@ -20,12 +20,20 @@ Licensed under the GNU Affero General Public License v3.0 or later.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
 from ..models import Notification, Subscription, WatchItem
 from ..render import build_anirss_card
-from ..sources.anirss import AniEntry, AniRssError, AniRssSnapshot, AniRssSource
+from ..sources.anirss import (
+    AniEntry,
+    AniRssError,
+    AniRssSnapshot,
+    AniRssSource,
+    parse_snapshot,
+    unwrap_payload,
+)
 from .base import Deps, Reply, make_card, style_for
 
 #: 卡片和通知里最多列几条，超出只报总数。ani-rss 里挂三五十条订阅是常态。
@@ -77,7 +85,6 @@ class AniRssSyncService:
         """
 
         deps = self._deps
-        conf = deps.conf
         source = self._source()
         if not source.configured:
             self._last_error = "还没配置 ani-rss 地址或密钥"
@@ -96,11 +103,65 @@ class AniRssSyncService:
             return {"ok": False, "error": error.message, **source.describe()}
         self._last_error = ""
 
+        return await self._commit(snapshot, targets, extra=source.describe(), origin="同步")
+
+    async def import_snapshot(self, raw: Any, *, targets: tuple[str, ...] = ()) -> dict[str, Any]:
+        """离线导入：吃一份手动导出的 「listAni」 响应，全程不碰网络。
+
+        为什么必须留这条路：ani-rss 基本都跑在自己电脑上，AstrBot 多半在公网服务器上。
+        服务器要主动连回家里的 7789 端口，就得内网穿透或在路由器上开端口 —— 不是谁都愿意
+        为了同步一张追番表把下载器暴露到公网。把 JSON 搬过来能得到完全一样的结果，
+        而且一行网络配置都不用改，也不需要填任何凭据。
+
+        「raw」 既可以是 JSON 文本，也可以是已经解析好的对象；包封和 「data」 两层都认。
+        """
+
+        deps = self._deps
+        payload: Any = raw
+        if isinstance(raw, (str, bytes, bytearray)):
+            text = raw if isinstance(raw, str) else bytes(raw).decode("utf-8", "replace")
+            if not text.strip():
+                return {"ok": False, "error": "导入内容是空的"}
+            try:
+                payload = json.loads(text)
+            except ValueError as error:
+                return {"ok": False, "error": f"不是合法 JSON：{error}"}
+        try:
+            snapshot = parse_snapshot(unwrap_payload(payload))
+        except AniRssError as error:
+            return {"ok": False, "error": error.message}
+        if not snapshot.entries:
+            return {
+                "ok": False,
+                "error": "这份数据里没有订阅条目，确认导出的是 「POST /api/listAni」 的响应",
+            }
+        self._last_error = ""
+        deps.activity.info("anirss", f"离线导入 {len(snapshot.entries)} 条订阅")
+        return await self._commit(
+            snapshot, targets, extra=self._source().describe(), origin="离线导入"
+        )
+
+    async def _commit(
+        self,
+        snapshot: AniRssSnapshot,
+        targets: tuple[str, ...],
+        *,
+        extra: dict[str, Any],
+        origin: str,
+    ) -> dict[str, Any]:
+        """把一份快照落库并记账。在线同步与离线导入共用这一段。
+
+        抽出来是因为两条入口只在「快照从哪来」上不同，落库、写 KV、发同步账目卡
+        这三件事必须一模一样 —— 复制一份出去迟早会有一边悄悄走偏。
+        """
+
+        deps = self._deps
+        conf = deps.conf
         sessions = tuple(dict.fromkeys(t for t in (targets or conf.anirss_sync_targets) if t))
         if not sessions:
             note = "同步目标为空：先在配置里填 「anirss_sync_targets」，否则不知道往哪个会话的追番表里写"
             deps.activity.warn("anirss", note)
-            return {"ok": False, "error": note, "total": snapshot.total, **source.describe()}
+            return {"ok": False, "error": note, "total": snapshot.total, **extra}
 
         report = _Report()
         for session in sessions:
@@ -108,17 +169,18 @@ class AniRssSyncService:
         await deps.store.kv_set(KV_LAST_SYNC, time.time())
         result = {
             "ok": True,
+            "origin": origin,
             "total": snapshot.total,
             "entries": len(snapshot.entries),
             "active": len(snapshot.active),
             "sessions": list(sessions),
             **report.payload(),
-            **source.describe(),
+            **extra,
         }
         await deps.store.kv_set(KV_LAST_RESULT, {k: v for k, v in result.items() if k != "ok"})
-        deps.activity.info("anirss", report.summary(len(snapshot.active)))
+        deps.activity.info("anirss", f"{origin}：{report.summary(len(snapshot.active))}")
         if conf.anirss_notify_on_change and report.changed:
-            await self._announce(snapshot, report)
+            await self._announce(snapshot, report, origin=origin)
         return result
 
     async def _apply(self, umo: str, snapshot: AniRssSnapshot, report: _Report) -> None:
@@ -241,7 +303,9 @@ class AniRssSyncService:
     # ------------------------------------------------------------------
     # 同步结果通知（独立链）
     # ------------------------------------------------------------------
-    async def _announce(self, snapshot: AniRssSnapshot, report: _Report) -> None:
+    async def _announce(
+        self, snapshot: AniRssSnapshot, report: _Report, *, origin: str = "同步"
+    ) -> None:
         deps = self._deps
         if self._notifier is None:
             return
@@ -250,7 +314,7 @@ class AniRssSyncService:
             return
         notification = Notification(
             kind="anirss_sync",
-            title="ani-rss 同步完成",
+            title=f"ani-rss {origin}完成",
             subtitle=report.summary(len(snapshot.active)),
             lines=tuple(report.lines()),
         )

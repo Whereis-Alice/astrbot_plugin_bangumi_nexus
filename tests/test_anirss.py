@@ -24,6 +24,7 @@ from nexus.sources.anirss import (
     parse_entry,
     parse_snapshot,
     subject_id_of,
+    unwrap_payload,
 )
 
 
@@ -376,3 +377,43 @@ class Test请求姿势:
         http = FakeHttp(FakeResponse({"code": 200, "data": True}))
         assert await _source(http).refresh_all() is True
         assert http.calls[0]["url"].endswith("/api/refreshAll")
+
+
+class Test剥离包封:
+    """离线导入时用户存下来的可能是整个包封，也可能只是里层的 「data」。"""
+
+    def test_整份包封剥成_data(self) -> None:
+        payload = {"code": 200, "message": "", "data": {"weekList": [], "total": 0}, "t": 1}
+        assert unwrap_payload(payload) == {"weekList": [], "total": 0}
+
+    def test_已经是_data_就原样返回(self) -> None:
+        """判据是「有 weekList 就是 data 本身」—— 否则会把它当包封再剥一层剥成 None。"""
+
+        data = {"weekList": [{"weekLabel": "1", "items": [ANI]}], "total": 1}
+        assert unwrap_payload(data) is data
+
+    def test_失败响应直接报出原因(self) -> None:
+        """存下来的可能是一份 401：这时候「没有条目」远不如原始 message 有用。"""
+
+        with pytest.raises(AniRssError) as caught:
+            unwrap_payload({"code": 401, "message": "api-key 不正确", "data": None})
+        assert "api-key 不正确" in caught.value.message
+        assert caught.value.status == 401
+
+    def test_没有_message_的失败也给出错误码(self) -> None:
+        with pytest.raises(AniRssError) as caught:
+            unwrap_payload({"code": 500, "data": None})
+        assert "500" in caught.value.message
+
+    def test_非字典原样放过(self) -> None:
+        """交给 「parse_snapshot」 去给出空快照，不在这里多编一种错法。"""
+
+        assert unwrap_payload([1, 2]) == [1, 2]
+
+    def test_既没有_data_也没有_weeklist_时原样返回(self) -> None:
+        assert unwrap_payload({"foo": 1}) == {"foo": 1}
+
+    def test_包封剥完能直接解析(self) -> None:
+        payload = {"code": 200, "data": {"weekList": [{"weekLabel": "1", "items": [ANI]}]}}
+        snapshot = parse_snapshot(unwrap_payload(payload))
+        assert [entry.title for entry in snapshot.entries] == ["名侦探光之美少女"]

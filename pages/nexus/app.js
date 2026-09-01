@@ -79,6 +79,7 @@ const state = {
   targetsDraft: null,
   anirss: null,
   anirssDraft: null,
+  anirssImportDraft: "",
   cards: { kind: "help", renderer: "", shots: new Map(), busy: new Set() },
   probes: null,
   search: { keyword: "", items: [], busy: false },
@@ -1774,6 +1775,11 @@ const ANIRSS_FLAGS = [
 ];
 
 /** ani-rss 里的一条订阅。「已认领」= 本地追番表里已经有它对应的那一行。 */
+// 用户在自己电脑上跑这一条就能拿到导出。端口是 ani-rss 的默认值，
+// 没设 API Key 的话把 「-H」 那一段去掉即可。
+const ANIRSS_EXPORT_CMD =
+  'curl -s -X POST "http://127.0.0.1:7789/api/listAni" -H "api-key: 你的APIKey" -o ani.json';
+
 function anirssRow(item, claimed) {
   const progress =
     Number(item.total) > 0
@@ -1904,6 +1910,36 @@ RENDERERS.anirss = () => {
       : note("插件还没在任何聊天窗口里见过消息，所以暂时没有可挑的会话。"),
   });
 
+  const importDraft = state.anirssImportDraft || "";
+  const importPanel = panel({
+    eyebrow: "offline",
+    title: "离线导入",
+    desc:
+      "连不上 ani-rss 时走这条：把导出的 JSON 搬过来，结果和在线同步一模一样。" +
+      "不用开端口、不用内网穿透，也不用在插件里填任何凭据。",
+    actions: btn("复制导出命令", {
+      act: "anirss-import-copy",
+      glyph: "copy",
+      kind: "ghost",
+      sm: true,
+    }),
+    body:
+      note("在跑着 ani-rss 的那台电脑上执行，然后把 ani.json 的内容整份粘到下面。") +
+      `<pre class="output">${esc(ANIRSS_EXPORT_CMD)}</pre>` +
+      `<div class="field" style="margin-top:var(--gap)">` +
+      `<span class="field-label">listAni 的响应</span>` +
+      `<textarea rows="6" placeholder='{"code":200,"data":{"weekList":[…]}}' data-live="anirss-import-draft">${esc(importDraft)}</textarea>` +
+      `<span class="field-hint">带 code / data 的整份包封和里层的 data 两种都认。落到哪些会话仍看上面那份已保存的名单。</span>` +
+      `</div>` +
+      `<div class="row">` +
+      btn("导入这份数据", { act: "anirss-import", glyph: "upload", kind: "primary", sm: true }) +
+      btn("清空", { act: "anirss-import-clear", glyph: "close", kind: "ghost", sm: true }) +
+      `</div>`,
+    foot: note(
+      "导入是「合并」而不是「覆盖」：本地没有的补上、进度只往前推，本地多出来的条目一律保留。",
+    ),
+  });
+
   const scopePanel = panel({
     eyebrow: "scope",
     title: "同步范围",
@@ -1988,7 +2024,7 @@ RENDERERS.anirss = () => {
         : "还没配置 ani-rss",
       btn("刷新", { act: "reload", glyph: "refresh", sm: true, kind: "ghost" }),
     ) +
-    `<div class="deck wide">${connectionPanel}${targetsPanel}${scopePanel}${itemsPanel}${reportPanel}</div>`
+    `<div class="deck wide">${connectionPanel}${targetsPanel}${importPanel}${scopePanel}${itemsPanel}${reportPanel}</div>`
   );
 };
 /* --- 视图：卡片预览 ------------------------------------------------------- */
@@ -2561,6 +2597,25 @@ function syncAnirssButtons() {
   if (reset) reset.disabled = !dirty;
 }
 
+/**
+ * 把同步 / 导入结果里的账目摘成一句话。
+ *
+ * 在线同步和离线导入返回的是同一个结构（都出自 「_commit」），提示语也该一致 ——
+ * 各写一份迟早会有一边漏掉某个桶。
+ */
+function anirssChanges(result) {
+  return [
+    ["新增", result.added],
+    ["更新", result.updated],
+    ["建订阅", result.subscribed],
+    ["失联", result.orphans],
+    ["失败", result.failures],
+  ]
+    .filter(([, rows]) => Array.isArray(rows) && rows.length)
+    .map(([label, rows]) => label + " " + num(rows.length))
+    .join(" · ");
+}
+
 /** 同理：配置页的文本框每敲一个字都重渲染会丢焦点，只同步按钮与计数徽标。 */
 function syncConfigButtons() {
   const host = $(`.view[data-view="config"]`);
@@ -2969,17 +3024,9 @@ const ACTIONS = {
     if (!result?.ok) {
       toast("同步没跑起来：" + (result?.error || "未知原因"), "err", 7000);
     } else {
-      const parts = [
-        ["新增", result.added],
-        ["更新", result.updated],
-        ["建订阅", result.subscribed],
-        ["失联", result.orphans],
-        ["失败", result.failures],
-      ]
-        .filter(([, rows]) => Array.isArray(rows) && rows.length)
-        .map(([label, rows]) => label + " " + num(rows.length));
+      const detail = anirssChanges(result);
       toast(
-        "读到 " + num(result.active || 0) + " 条启用中的订阅" + (parts.length ? "：" + parts.join(" · ") : "，两边已经对齐"),
+        "读到 " + num(result.active || 0) + " 条启用中的订阅" + (detail ? "：" + detail : "，两边已经对齐"),
         "ok",
         6000,
       );
@@ -2989,6 +3036,46 @@ const ACTIONS = {
     VIEW_LOADED.delete("subs");
     await loadView("anirss", { force: true });
     await touchOverview();
+  },
+
+  // 前端刻意不先 JSON.parse：后端要区分「不是 JSON」「这份本身是失败响应」
+  // 「里面没有条目」三种错法并给不同提示，提前解析只会把这些信息吃掉。
+  "anirss-import": async () => {
+    const text = String(state.anirssImportDraft || "").trim();
+    if (!text) {
+      toast("先把 ani-rss 导出的 JSON 粘进文本框", "warn");
+      return;
+    }
+    const result = await apiPost("anirss/import", { payload: text, targets: [] });
+    if (!result?.ok) {
+      toast("导入失败：" + (result?.error || "未知原因"), "err", 7000);
+      return;
+    }
+    const detail = anirssChanges(result);
+    toast(
+      "读到 " + num(result.active || 0) + " 条启用中的订阅" + (detail ? "：" + detail : "，两边已经对齐"),
+      "ok",
+      6000,
+    );
+    state.anirssImportDraft = "";
+    VIEW_LOADED.delete("watch");
+    VIEW_LOADED.delete("subs");
+    await loadView("anirss", { force: true });
+    await touchOverview();
+  },
+
+  "anirss-import-clear": () => {
+    state.anirssImportDraft = "";
+    render("anirss");
+  },
+
+  "anirss-import-copy": async () => {
+    try {
+      await navigator.clipboard.writeText(ANIRSS_EXPORT_CMD);
+      toast("已复制，去那台电脑上执行", "ok");
+    } catch {
+      toast("这个环境不允许自动复制，请手动全选上面那行命令", "warn", 6000);
+    }
   },
 
   "anirss-targets-save": async () => {
@@ -3176,6 +3263,10 @@ const LIVE_SETTERS = {
   "anirss-targets-draft": (value) => {
     state.anirssDraft = value;
     syncAnirssButtons();
+  },
+  "anirss-import-draft": (value) => {
+    // 不重渲染：导入按钮始终可点，空内容由 handler 拦，所以没必要动 DOM。
+    state.anirssImportDraft = value;
   },
   "cmd-filter": (value) => {
     state.cmdFilter = value;

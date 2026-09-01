@@ -11,6 +11,7 @@ Licensed under the GNU Affero General Public License v3.0 or later.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -50,6 +51,7 @@ class FakeSource:
         self.snapshot = snapshot
         self._configured = configured
         self.refreshed = 0
+        self.listed = 0
 
     @property
     def configured(self) -> bool:
@@ -59,6 +61,7 @@ class FakeSource:
         return {"base": "http://127.0.0.1:7789", "configured": self._configured, "auth": "api_key"}
 
     async def list_ani(self) -> AniRssSnapshot:
+        self.listed += 1
         return self.snapshot
 
     async def refresh_all(self) -> bool:
@@ -379,3 +382,168 @@ class Test状态与卡片:
         reply = await service.card(UMO)
         assert "名侦探光之美少女" in reply.text
         assert reply.card is not None
+
+
+RAW_ANI = {
+    "id": "a1",
+    "title": "名侦探光之美少女",
+    "url": "https://mikanani.me/RSS/Bangumi?bangumiId=3345",
+    "bgmUrl": "https://bgm.tv/subject/523174",
+    "image": "https://lain.bgm.tv/pic/cover/l/aa.jpg",
+    "totalEpisodeNumber": 50,
+    "currentEpisodeNumber": 22,
+    "weekLabel": "1",
+    "subgroup": "桜都字幕组",
+    "enable": True,
+}
+
+#: 用户在自己电脑上 「curl POST /api/listAni」 存下来的原样响应。
+RAW_EXPORT: dict[str, Any] = {
+    "code": 200,
+    "message": "",
+    "data": {"weekList": [{"weekLabel": "1", "items": [RAW_ANI]}], "total": 1},
+}
+
+
+class Test离线导入:
+    """ani-rss 基本都在自己电脑上，公网服务器连不回去，所以必须留一条搬 JSON 的路。
+
+    这一组要证明的核心是：**离线导入和在线同步落库结果完全一致**，
+    区别只在「快照从哪来」—— 否则用户会怀疑这条路是个缩水版。
+    """
+
+    async def test_粘一份_json_文本就能落库(self, store: Store) -> None:
+        service, source = _service(store, AniRssSnapshot())
+        result = await service.import_snapshot(json.dumps(RAW_EXPORT, ensure_ascii=False))
+        assert result["ok"] is True
+        assert result["added"] == ["名侦探光之美少女"]
+        rows = await store.list_watch(UMO)
+        assert (rows[0].progress, rows[0].total, rows[0].subject_id) == (22, 50, 523174)
+        # 全程不碰网络，这是这条路存在的唯一理由。
+        assert source.listed == 0
+
+    async def test_没配地址也能导入(self, store: Store) -> None:
+        """在线同步会因「没配好」直接拒绝；离线导入不需要任何凭据，必须放行。"""
+
+        service, _ = _service(store, AniRssSnapshot(), configured=False)
+        result = await service.import_snapshot(RAW_EXPORT)
+        assert result["ok"] is True
+        assert await store.list_watch(UMO)
+
+    async def test_已解析好的对象也认(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot())
+        assert (await service.import_snapshot(RAW_EXPORT))["ok"] is True
+
+    async def test_只给里层的_data_也认(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot())
+        result = await service.import_snapshot(RAW_EXPORT["data"])
+        assert result["ok"] is True
+        assert result["added"] == ["名侦探光之美少女"]
+
+    async def test_bytes_也认(self, store: Store) -> None:
+        """有人会用 「-o ani.json」 存文件再整份读上来，编码路径得走通。"""
+
+        service, _ = _service(store, AniRssSnapshot())
+        payload = json.dumps(RAW_EXPORT, ensure_ascii=False).encode("utf-8")
+        assert (await service.import_snapshot(payload))["ok"] is True
+
+    async def test_和在线同步落库结果一致(self, store: Store, tmp_path: Path) -> None:
+        online = Store(tmp_path / "online.db")
+        await online.initialize()
+        try:
+            snapshot = AniRssSnapshot(entries=(_entry(),), total=1)
+            live, _ = _service(online, snapshot)
+            await live.sync()
+            offline, _ = _service(store, AniRssSnapshot())
+            await offline.import_snapshot(RAW_EXPORT)
+            fields = ("title", "progress", "total", "subject_id", "weekday", "status")
+            picked = [
+                [getattr(row, name) for name in fields] for row in await store.list_watch(UMO)
+            ]
+            expected = [
+                [getattr(row, name) for name in fields] for row in await online.list_watch(UMO)
+            ]
+            assert picked == expected
+        finally:
+            await online.close()
+
+    async def test_重复导入同一份不会堆出第二条(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot())
+        await service.import_snapshot(RAW_EXPORT)
+        result = await service.import_snapshot(RAW_EXPORT)
+        assert result["added"] == []
+        assert len(await store.list_watch(UMO)) == 1
+
+    async def test_导入过的还能被在线同步接着认领(self, store: Store) -> None:
+        """认领关系记在 「anirss_links」 上，两条入口共用，所以不会互相打出重复行。"""
+
+        offline, _ = _service(store, AniRssSnapshot())
+        await offline.import_snapshot(RAW_EXPORT)
+        live, _ = _service(store, AniRssSnapshot(entries=(_entry(progress=30),), total=1))
+        result = await live.sync()
+        assert result["updated"] == ["名侦探光之美少女 → 30/50"]
+        assert len(await store.list_watch(UMO)) == 1
+
+
+class Test离线导入的错法:
+    """导入失败时最没用的提示是「没反应」，所以每种错法都得有自己的话。"""
+
+    async def test_空内容(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot())
+        result = await service.import_snapshot("   \n  ")
+        assert result["ok"] is False
+        assert "空" in result["error"]
+
+    async def test_不是合法_json(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot())
+        result = await service.import_snapshot("{看起来像但不是}")
+        assert result["ok"] is False
+        assert "JSON" in result["error"]
+        assert await store.list_watch(UMO) == []
+
+    async def test_存下来的是失败响应(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot())
+        result = await service.import_snapshot(
+            {"code": 401, "message": "api-key 不正确", "data": None}
+        )
+        assert result["ok"] is False
+        assert "api-key 不正确" in result["error"]
+
+    async def test_里面没有条目(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot())
+        result = await service.import_snapshot({"code": 200, "data": {"weekList": [], "total": 0}})
+        assert result["ok"] is False
+        assert "listAni" in result["error"]
+
+    async def test_目标会话为空时同样拒绝(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot(), anirss_sync_targets=())
+        result = await service.import_snapshot(RAW_EXPORT)
+        assert result["ok"] is False
+        assert "anirss_sync_targets" in result["error"]
+
+    async def test_可以当场指定会话(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot(), anirss_sync_targets=())
+        result = await service.import_snapshot(RAW_EXPORT, targets=("aiocqhttp:FriendMessage:9",))
+        assert result["ok"] is True
+        assert await store.list_watch("aiocqhttp:FriendMessage:9")
+
+
+class Test来路会被标出来:
+    """账目卡和结果字典都要写清是同步还是导入，否则用户看不出这份数字从哪来。"""
+
+    async def test_结果里带来路(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot(entries=(_entry(),), total=1))
+        assert (await service.sync())["origin"] == "同步"
+
+    async def test_导入的来路是离线导入(self, store: Store) -> None:
+        service, _ = _service(store, AniRssSnapshot())
+        assert (await service.import_snapshot(RAW_EXPORT))["origin"] == "离线导入"
+
+    async def test_播报标题跟着来路变(self, store: Store) -> None:
+        notifier = FakeNotifier()
+        service, _ = _service(store, AniRssSnapshot(), notifier=notifier)
+        await service.import_snapshot(RAW_EXPORT)
+        notification, targets = notifier.sent[0]
+        assert "离线导入" in notification.title
+        assert targets == (UMO,)
+        assert notification.kind == "anirss_sync"

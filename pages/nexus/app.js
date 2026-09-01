@@ -1774,12 +1774,12 @@ const ANIRSS_FLAGS = [
   ["anirss_notify_on_change", "notify_on_change", "有变化才播报", "只在真的新增 / 更新 / 建订阅时发账目卡，两边没差异就不打扰。"],
 ];
 
-/** ani-rss 里的一条订阅。「已认领」= 本地追番表里已经有它对应的那一行。 */
 // 用户在自己电脑上跑这一条就能拿到导出。端口是 ani-rss 的默认值，
 // 没设 API Key 的话把 「-H」 那一段去掉即可。
 const ANIRSS_EXPORT_CMD =
   'curl -s -X POST "http://127.0.0.1:7789/api/listAni" -H "api-key: 你的APIKey" -o ani.json';
 
+/** ani-rss 里的一条订阅。「已认领」= 本地追番表里已经有它对应的那一行。 */
 function anirssRow(item, claimed) {
   const progress =
     Number(item.total) > 0

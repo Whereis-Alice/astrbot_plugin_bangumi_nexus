@@ -241,7 +241,7 @@ class TestExpandExcludes:
     def test_preset_expands_to_synonyms(self) -> None:
         """用户勾的是 「繁体」，字幕组能写成 「繁日」「CHT」「BIG5」。"""
 
-        assert expand_excludes(["繁体"]) == ("繁体", "繁日", "CHT", "BIG5")
+        assert expand_excludes(["繁体"]) == ("繁体", "繁日", "繁中", "CHT", "BIG5", "[TC]", "TC]")
 
     def test_custom_word_passes_through(self) -> None:
         """不在预设里的自定义词按原样保留。"""

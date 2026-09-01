@@ -143,7 +143,9 @@ MIKAN_SITE = "https://mikanani.me"
 #: ⚠ 只用「足够长、不会误伤」的关键词。早期版本写过裸的 「sc」「tc」「gb」「ass」，
 #: 它们会在 「Discovery」「Switch」「class」 这类普通单词里命中，标记就成了噪音。
 RELEASE_TAG_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("简体", ("简体", "简日", "简中", "简繁", "chs", "[gb", "gb]", "[sc]", "sc]")),
+    # ⚠ 同样不能收 「gb]」：「[2.1GB]」 这类体积标注会被误标成简体，
+    # 于是一条纯繁体发布在同集归并里拿到「简体」的分，反过来压掉真正的简体版。
+    ("简体", ("简体", "简日", "简中", "简繁", "chs", "[gb", "[sc]", "sc]")),
     ("繁体", ("繁体", "繁日", "繁中", "简繁", "big5", "cht", "[tc]", "tc]")),
     ("1080p", ("1080p", "1920x1080")),
     ("720p", ("720p", "1280x720")),
@@ -161,23 +163,57 @@ RELEASE_TAG_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 #: 全局排除项预设：「展示名 -> 写进订阅 excludes 的关键词」。
 #: 为什么要预设：同一个字幕组把简体、繁体、720p、1080p 各发一遍，
 #: 逐条手写黑名单太啰嗦，WebUI 与指令都从这份清单里勾选。
+#: ⚠ 这份表跟 「RELEASE_TAG_RULES」 长得像，但**不能**合并：那张表是「给这条发布贴标签」，
+#: 双语单文件既算简体也算繁体；这张表是「命中就丢掉」，双语单文件不该被
+#: 「不要繁体」 误杀。所以两张表的语言项故意不同 —— 这里绝不收 「简繁」。
+#: ⚠ 关键词一律走子串匹配，所以短缩写必须自带边界（「[CR]」「CR 」 而不是裸 「CR」，
+#: 否则 「Secret」「Sacred」 里的 「cr」 也会命中；「Raw」 同理会打死 「[NC-Raws]」）。
 EXCLUDE_PRESETS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("简体", ("简体", "简日", "CHS", "GB")),
-    ("繁体", ("繁体", "繁日", "CHT", "BIG5")),
+    # ⚠ 这里刻意**不收** 「GB]」：「[2.1GB]」 这种体积标注满天飞，会把整组发布误杀。
+    # 简体写成 「[GB]」「[GB_JP]」 的都由 「[GB」 覆盖。
+    ("简体", ("简体", "简日", "简中", "CHS", "[GB", "[SC]", "SC]")),
+    ("繁体", ("繁体", "繁日", "繁中", "CHT", "BIG5", "[TC]", "TC]")),
     ("简繁", ("简繁", "繁简", "CHS&CHT", "CHT&CHS", "GB&BIG5", "BIG5&GB")),
     ("720p", ("720p", "1280x720")),
     ("1080p", ("1080p", "1920x1080")),
     ("2160p", ("2160p", "3840x2160")),
     ("Baha", ("Baha", "Bahamut")),
     ("ABEMA", ("ABEMA",)),
-    ("CR", ("Crunchyroll", "CR ")),
-    ("B-Global", ("B-Global", "Bilibili")),
+    ("CR", ("Crunchyroll", "[CR]", "(CR)", "CR ")),
+    ("B-Global", ("B-Global", "BGlobal", "Bilibili")),
     ("内嵌", ("内嵌", "hardsub")),
-    ("外挂", ("外挂", "内封", "softsub")),
+    ("外挂", ("外挂", "内封", "softsub", "[ASS", "ASS]")),
     ("MKV", ("MKV",)),
     ("MP4", ("MP4",)),
-    ("合集", ("合集", "Batch", "BDRip", "BDrip")),
-    ("生肉", ("生肉", "无字幕", "Raw")),
+    ("合集", ("合集", "Batch", "BDRip")),
+    ("生肉", ("生肉", "无字幕", "[RAW]", "(RAW)", "RAW ")),
+)
+
+#: 「单文件双语」的写法。命中其中之一，就说明这条发布同时带简体与繁体字幕。
+#: 为什么要单列：过滤是纯子串匹配，而 「简繁日内封」 里含有 「繁日」、
+#: 「CHS&CHT」 里含有 「CHT」 —— 用户勾「不要繁体」 是想躲纯繁版，
+#: 不是想把本来就带简体的双语单文件一起丢掉（实测这类发布占比很高，
+#: 误杀等于整集收不到）。
+DUAL_LANGUAGE_MARKERS: tuple[str, ...] = (
+    "简繁",
+    "繁简",
+    "chs&cht",
+    "cht&chs",
+    "chs_cht",
+    "cht_chs",
+    "chs-cht",
+    "cht-chs",
+    "gb&big5",
+    "big5&gb",
+    "gb_big5",
+    "big5_gb",
+)
+
+#: 只在「单语」时才算命中的关键词，即上面 「简体」/「繁体」 两组预设的全部写法。
+#: 标题里出现 「DUAL_LANGUAGE_MARKERS」 时，这些词的命中一律作废（见 「blocked_by」）。
+#: 「简繁」 那组预设不在此列 —— 勾它的人要的正是「双语单文件也别给我」。
+LANGUAGE_ONLY_WORDS: frozenset[str] = frozenset(
+    word.lower() for name in ("简体", "繁体") for word in dict(EXCLUDE_PRESETS)[name]
 )
 
 EXCLUDE_PRESET_BY_NAME = dict(EXCLUDE_PRESETS)

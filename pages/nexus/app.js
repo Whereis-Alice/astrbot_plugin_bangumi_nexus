@@ -1384,6 +1384,9 @@ function excludeValues() {
  *
  * 展开规则与后端 「expand_excludes」 一致，而预设词表本身也是后端下发的，
  * 所以勾一下就能立刻看到效果，不必为一个预览再跑一趟接口。
+ *
+ * ⚠ 与后端一样不对词 「trim」：预设里的 「CR 」 靠尾部空格划边界，
+ * 预览里抹掉就会跟真实过滤结果对不上（还会跟裸 「CR」 错误地判成重复）。
  */
 function excludeExpand(names) {
   const table = new Map(excludeDraft.presets.map((row) => [row.name, row.words || []]));
@@ -1391,9 +1394,9 @@ function excludeExpand(names) {
   const words = [];
   for (const name of names) {
     for (const raw of table.get(name) || [name]) {
-      const word = String(raw).trim();
+      const word = String(raw);
       const key = word.toLowerCase();
-      if (!word || seen.has(key)) continue;
+      if (!word.trim() || seen.has(key)) continue;
       seen.add(key);
       words.push(word);
     }
@@ -1455,7 +1458,11 @@ function excludePanel() {
   return panel({
     eyebrow: "filter",
     title: "排除项",
-    desc: "过滤分三层：配置页的全局排除项（所有会话都吃）→ 这里的本会话排除项 → 每条订阅自己的关键词。同一集的简繁 / 画质 / 片源多版本还会被「同集归并」再收一次口。",
+    desc:
+      "过滤分三层：配置页的全局排除项（所有会话都吃）→ 这里的本会话排除项 → 每条订阅自己的关键词。" +
+      "建议只在这里排掉「任何形式都不想要」的东西（合集 / 生肉 / 720p）；语言和片源属于口味，" +
+      "交给「同集归并」按优先顺序挑更划算 —— 硬屏蔽 ABEMA / CR 的代价是 Baha 那天没出片就整集收不到。" +
+      "勾「繁体」不会误杀「简繁日内封」这类双语单文件，要连双语一起躲请勾「简繁」。",
     actions:
       btn(dirty ? "保存改动" : "保存", {
         act: "exclude-save",

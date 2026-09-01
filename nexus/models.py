@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .constants import SUBJECT_TYPE_CN, WATCH_STATUS_CN, WEEKDAY_CN
+from .excludes import blocked_by
 
 # ---------------------------------------------------------------------------
 # Bangumi
@@ -269,12 +270,18 @@ class Subscription:
     created_at: float = field(default_factory=time.time)
 
     def matches(self, title: str) -> bool:
-        """关键词白名单 + 黑名单过滤，全部大小写不敏感。"""
+        """关键词白名单 + 黑名单过滤，全部大小写不敏感。
+
+        黑名单刻意复用 「nexus.excludes.blocked_by」 而不是在这里重写一遍
+        「word in title」：这条订阅自己的 「excludes」 与全局/会话两层排除项
+        本该是同一套语义，之前分家的结果是 「CR 」 的空格边界和双语单文件豁免
+        只在轮询那条路上生效，per-subscription 黑名单静默误杀。
+        """
 
         text = title.lower()
         if self.keywords and not any(word.lower() in text for word in self.keywords):
             return False
-        return all(word.lower() not in text for word in self.excludes)
+        return not blocked_by(title, self.excludes)
 
 
 @dataclass

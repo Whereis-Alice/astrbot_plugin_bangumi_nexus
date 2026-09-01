@@ -91,7 +91,13 @@ def _split(text: str) -> tuple[str, ...]:
 
 
 def _join(values: Iterable[str]) -> str:
-    return "\u0000".join(str(value).strip() for value in values if str(value).strip())
+    """把一组词拼成一列落库。
+
+    ⚠ 只丢掉纯空白的词，**不对词本身 strip**：排除项预设里的 「CR 」 靠尾部那个
+    空格划边界（见 「nexus.excludes.blocked_by」），存库时抹掉，取出来就会在
+    「Secret」「Sacred」 里误命中整集。用户手打的词在进入这里之前已经 strip 过。
+    """
+    return "\u0000".join(str(value) for value in values if str(value).strip())
 
 
 class Store:

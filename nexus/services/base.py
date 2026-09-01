@@ -14,7 +14,12 @@ from typing import Any
 
 from ..activity import ActivityLog
 from ..config import NexusConfig
-from ..constants import COVER_HERO_EDGE, COVER_THUMB_EDGE, EXCLUDE_PRESET_BY_NAME
+from ..constants import COVER_HERO_EDGE, COVER_THUMB_EDGE
+
+# 「blocked_by」 在本模块里没有调用点，仍从这里再导出一次：base.py 是服务层的门面，
+# 「services.subscriptions」/「web.api」/测试一直按 「from .base import blocked_by」 取用，
+# 换成各处直连 「nexus.excludes」 只是把同一份依赖摊薄成多处，没有收益。
+from ..excludes import blocked_by, expand_excludes  # noqa: F401 - 服务层门面转出
 from ..http import HttpClient
 from ..render import CardEngine, CardRequest, RenderedCard, plain_lines
 from ..sources.hub import SourceHub
@@ -129,27 +134,6 @@ async def style_for(deps: Deps, umo: str) -> tuple[str, str]:
     return theme, renderer
 
 
-def expand_excludes(values: Iterable[str]) -> tuple[str, ...]:
-    """把用户勾的排除项展开成真正用于过滤的关键词。
-
-    输入既接受预设名（「繁体」「720p」），也接受任意自定义词。预设名会展开成
-    一组同义写法 —— 同一件事字幕组能写出 「繁体」「繁日」「CHT」「BIG5」 四种，
-    只存字面量等于没过滤。展开后去重并保持勾选顺序，便于在 WebUI 里回显。
-    """
-    result: list[str] = []
-    seen: set[str] = set()
-    for raw in values:
-        name = str(raw or "").strip()
-        if not name:
-            continue
-        for word in EXCLUDE_PRESET_BY_NAME.get(name, (name,)):
-            key = word.strip().lower()
-            if key and key not in seen:
-                seen.add(key)
-                result.append(word.strip())
-    return tuple(result)
-
-
 async def excludes_for(deps: Deps, umo: str) -> tuple[str, ...]:
     """取「本会话排除项」（用户勾选的原始名字，未展开）。
 
@@ -182,17 +166,6 @@ async def effective_excludes(deps: Deps, umo: str) -> tuple[str, ...]:
     「excludes」 字段），前两层永远该一起生效，分散拼装迟早漏一处。
     """
     return expand_excludes((*global_excludes(deps), *(await excludes_for(deps, umo))))
-
-
-def blocked_by(title: str, words: Iterable[str]) -> str:
-    """标题是否命中排除词，命中就返回那个词（便于日志说明原因），否则空串。"""
-
-    text = (title or "").lower()
-    for word in words:
-        needle = str(word or "").strip().lower()
-        if needle and needle in text:
-            return str(word)
-    return ""
 
 
 async def set_excludes(deps: Deps, umo: str, values: Iterable[str]) -> tuple[str, ...]:

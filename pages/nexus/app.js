@@ -930,6 +930,12 @@ RENDERERS.overview = () => {
         : "") +
       (listener.deferred
         ? note("有 " + num(listener.deferred) + " 条事件因为人格转述或封面渲染偏慢，先回了 202「已受理」，卡片随后在后台补发——这是正常行为，不是失败，ani-rss 不会重推。")
+        : "") +
+      (listener.malformed
+        ? note("有 " + num(listener.malformed) + " 条请求体不是合法 JSON，已经被回了 400。十次有九次是 ani-rss 的 Body 模板里「${message}」没被引号包住，照下面「Body 模板」那一栏重填一遍就好。", "warn")
+        : "") +
+      (listener.repaired
+        ? note("有 " + num(listener.repaired) + " 条请求体是靠容错救回来的——事件没丢，但模板确实还缺引号，建议照「Body 模板」改一版，别一直靠容错兜着。", "warn")
         : ""),
   });
 
@@ -1895,12 +1901,12 @@ const ANIRSS_EXPORT_CMD =
 
 // ani-rss 的 WebHook 只能把占位符拼进 body，所以这里给一份「刚够用」的模板：
 // 事件名 / 番名 / 季集 / 封面 / bgm 链接 / 字幕组 / 评分，最后带上 ani-rss 自己拼好的整段文本。
-// ⚠ 「${message}」 外面不能加引号 —— 它已经是转义好的 JSON 片段，再包一层引号整个 body 就坏了；
-//   其余占位符反而必须加引号，因为 「${season}」「${episode}」 展开出来是裸数字。
+// ⚠ 每个占位符都要用引号包住，「${message}」 也一样 —— ani-rss 只负责把内容里的引号和换行转义掉，
+//   不会替你补外层引号；少了这一对，整个 body 就不是合法 JSON，每条推送都会被原样回 400。
 const WEBHOOK_BODY_TPL =
   '{"event":"${action}","title":"${title}","season":"${season}","episode":"${episode}",' +
   '"poster_url":"${image}","url":"${bgmUrl}","subgroup":"${subgroup}","score":"${score}",' +
-  '"message":${message}}';
+  '"message":"${message}"}';
 
 // 请求头一行一条。ani-rss 是按第一个冒号切开的，所以令牌值里绝不能再出现冒号。
 const WEBHOOK_HEADER_TPL = "Content-Type: application/json\nX-Webhook-Token: 你设的 webhook_token";

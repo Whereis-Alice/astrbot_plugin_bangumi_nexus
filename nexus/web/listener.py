@@ -32,6 +32,7 @@ from astrbot.api import logger
 
 from ..activity import ActivityLog
 from ..constants import LOG_PREFIX, PLUGIN_BRAND
+from .jsonbody import parse_body, preview
 
 # 请求体上限 256KB。AutoBangumi 的事件 JSON 通常不到 2KB，
 # 给足余量同时避免被大 body 拖垮内存。
@@ -107,6 +108,8 @@ class WebhookListener:
         self._requests = 0
         self._errors = 0
         self._deferred = 0
+        self._repaired = 0
+        self._malformed = 0
         self._started_at = 0.0
         # 后台仍在跑的业务任务。必须持强引用，否则会被 GC 掉，
         # Python 只会留下一句「Task was destroyed but it is pending」。
@@ -223,6 +226,8 @@ class WebhookListener:
             "requests": self._requests,
             "errors": self._errors,
             "deferred": self._deferred,
+            "repaired": self._repaired,
+            "malformed": self._malformed,
             "pending": len(self._pending),
             "uptime": int(time.time() - self._started_at) if self._started_at else 0,
         }
@@ -275,12 +280,16 @@ class WebhookListener:
         early = self._early_reply(request)
         if early is not None:
             return early
+        text = request.body.decode("utf-8", "replace")
         try:
-            payload = json.loads(request.body.decode("utf-8", "replace") or "{}")
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            parsed = parse_body(text)
+        except json.JSONDecodeError as exc:
+            self._reject_bad_json(text, exc, request.headers)
             return 400, {"ok": False, "error": "请求体不是合法 JSON"}
+        if parsed.repairs:
+            self._note_repairs(parsed.repairs, text)
         self._requests += 1
-        return await self._invoke(payload, _token_from(request.headers), request.headers)
+        return await self._invoke(parsed.payload, _token_from(request.headers), request.headers)
 
     def _early_reply(self, request: _Request) -> tuple[int, dict[str, Any]] | None:
         """纯路由判断，不碰业务。返回 None 表示「该交给业务层了」。"""
@@ -294,6 +303,50 @@ class WebhookListener:
         if request.method != "POST":
             return 405, {"ok": False, "error": "只接受 POST"}
         return None
+
+    def _reject_bad_json(
+        self,
+        text: str,
+        exc: json.JSONDecodeError,
+        headers: Mapping[str, str],
+    ) -> None:
+        """回 400 之前把线索留下来。
+
+        为什么值得单独一个方法：早先这里只 「return 400」，AstrBot 日志里一个字都没有，
+        用户能看到的只有推送端那句「通知失败」。真出过事 —— ani-rss 的模板里
+        「${message}」 少了一对引号，几十条推送全 400，而唯一的记录在 nginx 的
+        access log 里。现在把出错位置、声明的 Content-Type 和原文开头一并打出来，
+        照着日志就能改模板。
+        """
+        self._malformed += 1
+        detail = f"{exc.msg}（第 {exc.pos} 个字符）"
+        head = preview(text)
+        logger.warning(
+            "%s Webhook 请求体不是合法 JSON：%s｜Content-Type: %s｜原文开头：%s｜"
+            "最常见的原因是模板里 ${message} 这类占位符没被引号包住，见 README 的 ani-rss 一节",
+            LOG_PREFIX,
+            detail,
+            headers.get("content-type", "（未声明）"),
+            head,
+        )
+        self._warn("请求体不是合法 JSON：" + detail + "｜原文开头：" + head)
+
+    def _note_repairs(self, repairs: tuple[str, ...], text: str) -> None:
+        """靠容错救回来的请求也要留一条 warning。
+
+        事件没丢，但模板还是错的：不提醒的话用户永远不知道自己一直在吃容错兜底，
+        哪天写成救不回来的形状，又是一次「莫名其妙就是不通知」。
+        """
+        self._repaired += 1
+        summary = "；".join(repairs)
+        logger.warning(
+            "%s Webhook 请求体不是标准 JSON，已按容错规则救回：%s｜原文开头：%s｜"
+            "建议照 README 的模板改一版，容错只是止血",
+            LOG_PREFIX,
+            summary,
+            preview(text),
+        )
+        self._warn("请求体已容错解析：" + summary)
 
     async def _invoke(
         self,

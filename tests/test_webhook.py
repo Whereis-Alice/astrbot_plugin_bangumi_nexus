@@ -550,6 +550,37 @@ class TestServeOnce:
         assert status == 400
         assert "JSON" in body["error"]
 
+    async def test_bad_json_is_counted_and_logged(self) -> None:
+        """400 也要留痕：真出事时唯一的记录曾经只在 nginx 的 access log 里。"""
+
+        rec = _Recorder()
+        lst = _listen(_ok_handler, activity=rec)
+        status, _ = await lst._serve_once(_reader(_raw(body=b"not-json")))
+        assert status == 400
+        stats = lst.stats()
+        assert stats["malformed"] == 1
+        assert stats["repaired"] == 0
+        # 没进业务层就不该记进 requests，否则「收到多少条」会虚高。
+        assert stats["requests"] == 0
+        assert any("不是合法 JSON" in text for text in rec.warns)
+
+    async def test_missing_quotes_are_rescued(self) -> None:
+        """ani-rss 模板漏了 「${message}」 那对引号时，事件不能跟着一起丢。"""
+
+        rec = _Recorder()
+        body = '{"event":"download_complete","title":"药屋","message":第 3 集完成}'
+        lst = _listen(_ok_handler, activity=rec)
+        status, resp = await lst._serve_once(_reader(_raw(body=body.encode("utf-8"))))
+        assert status == 200
+        assert resp["echo"]["event"] == "download_complete"
+        assert resp["echo"]["message"] == "第 3 集完成"
+        stats = lst.stats()
+        assert stats["repaired"] == 1
+        assert stats["malformed"] == 0
+        assert stats["requests"] == 1
+        # 救回来了也要提醒：不然用户永远不知道自己一直在吃容错兜底。
+        assert any("容错" in text for text in rec.warns)
+
     async def test_empty_body_becomes_object(self) -> None:
         lst = _listen(_ok_handler)
         status, body = await lst._serve_once(_reader(_raw()))

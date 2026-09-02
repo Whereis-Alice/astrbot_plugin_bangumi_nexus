@@ -764,11 +764,18 @@ X-Webhook-Token: 你在第 1 步设的令牌
 **消息内容（Body）**：
 
 ```json
-{"event":"${action}","title":"${title}","season":"${season}","episode":"${episode}","poster_url":"${image}","url":"${bgmUrl}","subgroup":"${subgroup}","score":"${score}","message":${message}}
+{"event":"${action}","title":"${title}","season":"${season}","episode":"${episode}","poster_url":"${image}","url":"${bgmUrl}","subgroup":"${subgroup}","score":"${score}","message":"${message}"}
 ```
 
-> ⚠️ `${message}` 是 ani-rss 已经转义好的整段通知文本，**外面千万不要再加引号**，加了 JSON 就坏了。
-> 其余占位符**全部要加引号** —— `${season}` / `${episode}` 展开出来是裸数字，不加引号在某些集数下同样会坏。
+> ⚠️ **每个占位符都要用引号包住，`${message}` 也一样。**
+> ani-rss 只帮你转义 `${message}` 的内容（引号、换行都处理好了），**但不会替你补外层引号** ——
+> 少这一对，整个 Body 就不是合法 JSON，插件只能回 `400`，你那头看到的就是「通知失败」。
+> `${season}` / `${episode}` 展开出来是裸数字，同理必须加引号。
+>
+> 另外两点容易踩：**别用 `${notification}`**（ani-rss 把它原样塞进来，不转义，一遇到换行就坏，用 `${message}` 就够了）；
+> `${title}` `${subgroup}` 这些也是原样替换，所以番名里真带英文双引号时同样会撑坏 JSON。
+> 插件从 v1.2.7 起会尽力把这类缺引号的 Body 修回来，并在 AstrBot 日志里提醒你改模板 ——
+> 但能修的形状有限，模板还是照上面这份抄最稳。
 
 **通知状态**（最容易漏的一步）：ani-rss 默认只勾「开始下载 / 缺少集数 / 发生错误」，
 **「下载完成」默认是没勾的** —— 不勾它，进度回填永远不会触发。建议至少勾上「开始下载」和「下载完成」，
@@ -859,7 +866,7 @@ webhook_silent_kinds = ["下载完成"]
 | --- | --- | --- |
 | `200` | 收下了，卡片也发完了 | 正常 |
 | `202` | **收下了，卡片正在后台生成** | 正常，见下方说明 |
-| `400` | Body 不是合法 JSON，或者缺了必要字段 | 检查模板里 `${message}` 有没有被多加一层引号 |
+| `400` | Body 不是合法 JSON，或者缺了必要字段 | 十次有九次是模板里 `${message}` 没被引号包住。AstrBot 日志里会打出出错位置和原文开头，照着改 |
 | `401` | 令牌不对或没带 | 核对请求头 `X-Webhook-Token`，注意值里不能有冒号 |
 | `404` | 路径不匹配 `webhook_path` | 地址少写/多写了一层，注意大小写与尾斜杠 |
 | `405` | 用了 GET 之外的非 POST 方法 | 请求方式改成 `POST` |

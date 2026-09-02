@@ -23,6 +23,7 @@ from typing import Any, cast
 import pytest
 
 from nexus.config import NexusConfig
+from nexus.models import Episode, Subject
 from nexus.services import webhook
 from nexus.web import listener
 
@@ -36,21 +37,35 @@ class _Activity:
 
 
 class _Bangumi:
-    """封面一律搜不到 —— 解析层用例不该碰网络。"""
+    """封面一律搜不到 —— 解析层用例不该碰网络。
+
+    「subject」/「episodes」 也给了空实现：「build」 拿到条目 ID 之后会去补总集数和
+    季内集数，缺了这两个方法，凡是 body 里带 bgm.tv 链接的用例都会炸在
+    「AttributeError」 上 —— 而那跟被测的解析逻辑毫无关系。
+    """
 
     async def search(self, keyword: str, *, limit: int = 1) -> list[Any]:
         return []
 
+    async def subject(self, subject_id: int) -> Any:
+        return None
 
-def _service(conf: NexusConfig) -> webhook.WebhookService:
-    """只装配解析层用得到的依赖，「notifier」/「store」 都不参与。"""
+    async def episodes(self, subject_id: int, *, limit: int = 100) -> list[Episode]:
+        return []
+
+
+def _service(conf: NexusConfig, *, bangumi: Any = None) -> webhook.WebhookService:
+    """只装配解析层用得到的依赖，「notifier」/「store」 都不参与。
+
+    「bangumi」 可以换成别的存根，用来给「连续编号还原」喂真实分集表并数调用次数。
+    """
 
     deps = cast(
         Any,
         SimpleNamespace(
             conf=conf,
             activity=_Activity(),
-            hub=SimpleNamespace(bangumi=_Bangumi()),
+            hub=SimpleNamespace(bangumi=bangumi or _Bangumi()),
         ),
     )
     return webhook.WebhookService(deps, notifier=cast(Any, SimpleNamespace()))
@@ -299,6 +314,190 @@ class TestBuildFromAniRss:
         service = _service(NexusConfig(enable_cross_match=False))
         note = await service.build({"event": "订阅完结", "title": "X"})
         assert note.subtitle == "本季完结"
+
+
+# 《超超超超超喜欢你的100个女朋友 第三季》（Bangumi 598058）的真实分集表：季内集数
+# 1~12 对应连续编号 25~36 —— 前两季各 12 集，字幕组的文件名接着往下数。
+_S3_NUMBERS: tuple[tuple[int, int], ...] = tuple((ep, ep + 24) for ep in range(1, 13))
+
+
+def _s3_episodes(*, with_ep: bool = True) -> list[Episode]:
+    """构造那张分集表。「with_ep=False」 模拟上游漏填 「ep」 字段的老条目。"""
+
+    return [
+        Episode(id=900000 + sort, sort=float(sort), ep=float(ep) if with_ep else 0.0)
+        for ep, sort in _S3_NUMBERS
+    ]
+
+
+class _S3Bangumi:
+    """会说话的 Bangumi 存根：给出 12 集的条目和 25~36 的分集表，并数调用次数。"""
+
+    def __init__(self, *, with_ep: bool = True, eps: int = 12) -> None:
+        self._with_ep = with_ep
+        self._eps = eps
+        self.subject_calls = 0
+        self.episode_calls = 0
+
+    async def search(self, keyword: str, *, limit: int = 1) -> list[Any]:
+        return []
+
+    async def subject(self, subject_id: int) -> Any:
+        self.subject_calls += 1
+        return Subject(id=subject_id, name="100 Girlfriends S3", total_episodes=self._eps)
+
+    async def episodes(self, subject_id: int, *, limit: int = 100) -> list[Episode]:
+        self.episode_calls += 1
+        return _s3_episodes(with_ep=self._with_ep)
+
+
+class Test分集表反查:
+    """「inner_episode」：拿字幕组的连续编号去 Bangumi 分集表里换季内集数。"""
+
+    def test_命中真实分集表(self) -> None:
+        eps = _s3_episodes()
+        assert webhook.inner_episode(eps, 25) == 1
+        assert webhook.inner_episode(eps, 27) == 3
+        assert webhook.inner_episode(eps, 36) == 12
+
+    def test_对不上宁可放弃(self) -> None:
+        """差一点也返回 0 —— 猜错集数会直接写进追番进度，比不猜更糟。"""
+
+        eps = _s3_episodes()
+        assert webhook.inner_episode(eps, 24) == 0
+        assert webhook.inner_episode(eps, 37) == 0
+        assert webhook.inner_episode(eps, 99) == 0
+
+    def test_非正数直接退出(self) -> None:
+        assert webhook.inner_episode(_s3_episodes(), 0) == 0
+        assert webhook.inner_episode(_s3_episodes(), -3) == 0
+
+    def test_空表不炸(self) -> None:
+        assert webhook.inner_episode([], 27) == 0
+
+    def test_上游漏了ep字段就用下标兜底(self) -> None:
+        """分集表已按 「sort」 升序，同一季内下标顺序就是集数顺序。"""
+
+        eps = _s3_episodes(with_ep=False)
+        assert webhook.inner_episode(eps, 25) == 1
+        assert webhook.inner_episode(eps, 27) == 3
+        assert webhook.inner_episode(eps, 36) == 12
+
+
+class Test连续编号自动还原:
+    """body 里没写 「${currentEpisodeNumber}」 时，靠 Bangumi 分集表把它算回来。
+
+    这是 1.2.9 的主线：用户的 ani-rss 模板只给了 「${episode}」，年番第三季推来的是
+    27，卡片会写「第 27 集 · 共 12 集」，回填还会把 12 集的条目直接顶成假完结。
+    """
+
+    @staticmethod
+    def _body(**extra: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "event": "下载完成",
+            "title": "超超超超超喜欢你的100个女朋友 第三季",
+            "season": "3",
+            "episode": "27",
+            "url": "https://bgm.tv/subject/598058",
+        }
+        payload.update(extra)
+        return payload
+
+    async def test_年番第三季的27还原成第3集(self) -> None:
+        bangumi = _S3Bangumi()
+        service = _service(NexusConfig(enable_cross_match=False), bangumi=bangumi)
+        note = await service.build(self._body())
+        assert note.payload["subject_id"] == 598058
+        assert note.payload["episode"] == 27
+        assert note.payload["current_episode"] == 3
+        assert note.payload["total_episodes"] == 12
+        assert "进度：第 3 季第 03 集 · 共 12 集（源编号 S03E27）" in note.lines
+        assert bangumi.subject_calls == 1
+        assert bangumi.episode_calls == 1
+
+    async def test_模板给全了就一次网络都不发(self) -> None:
+        bangumi = _S3Bangumi()
+        service = _service(NexusConfig(enable_cross_match=False), bangumi=bangumi)
+        note = await service.build(self._body(currentEpisodeNumber="3", totalEpisodeNumber="12"))
+        assert note.payload["current_episode"] == 3
+        assert bangumi.subject_calls == 0
+        assert bangumi.episode_calls == 0
+
+    async def test_普通番剧不查分集表(self) -> None:
+        """编号没超出总集数就是普通番剧，两个数本来一样，不该为此多打一次 API。"""
+
+        bangumi = _S3Bangumi()
+        service = _service(NexusConfig(enable_cross_match=False), bangumi=bangumi)
+        note = await service.build(self._body(season="1", episode="7"))
+        assert note.payload["current_episode"] == 0
+        assert bangumi.subject_calls == 1
+        assert bangumi.episode_calls == 0
+        assert "进度：第 1 季第 07 集 · 共 12 集" in note.lines
+
+    async def test_容差之内也不查(self) -> None:
+        """容差留给带 SP 的番：12 集的条目推第 14 集不足以判定是连续编号。"""
+
+        bangumi = _S3Bangumi()
+        service = _service(NexusConfig(enable_cross_match=False), bangumi=bangumi)
+        await service.build(self._body(episode="14"))
+        assert bangumi.episode_calls == 0
+
+    async def test_没有条目ID就整段跳过(self) -> None:
+        """磁力链接里没有条目 ID，此时宁可什么都不补。"""
+
+        bangumi = _S3Bangumi()
+        service = _service(NexusConfig(enable_cross_match=False), bangumi=bangumi)
+        note = await service.build(self._body(url="magnet:?xt=urn:btih:deadbeef"))
+        assert note.payload["subject_id"] == 0
+        assert note.payload["current_episode"] == 0
+        assert bangumi.subject_calls == 0
+        assert bangumi.episode_calls == 0
+
+    async def test_分集表拉不到就退回原样(self) -> None:
+        class _Broken(_S3Bangumi):
+            async def episodes(self, subject_id: int, *, limit: int = 100) -> list[Episode]:
+                raise RuntimeError("分集接口抖了")
+
+        service = _service(NexusConfig(enable_cross_match=False), bangumi=_Broken())
+        note = await service.build(self._body())
+        assert note.payload["current_episode"] == 0
+        assert "进度：第 3 季第 27 集 · 共 12 集" in note.lines
+
+    async def test_条目拉不到也不拦主流程(self) -> None:
+        """总集数是判定前提，取不到就判不出「超出总集数」，安静退回原样。"""
+
+        class _Broken(_S3Bangumi):
+            async def subject(self, subject_id: int) -> Any:
+                raise RuntimeError("条目没了")
+
+        service = _service(NexusConfig(enable_cross_match=False), bangumi=_Broken())
+        note = await service.build(self._body())
+        assert note.payload["total_episodes"] == 0
+        assert note.payload["current_episode"] == 0
+        assert "进度：第 3 季第 27 集" in note.lines
+
+    async def test_还原结果正是回填读的那个数(self) -> None:
+        """「_sync_watchlist」 取 「current_episode or episode」，还原后才不会假完结。"""
+
+        service = _service(NexusConfig(enable_cross_match=False), bangumi=_S3Bangumi())
+        note = await service.build(self._body())
+        payload = note.payload
+        assert (payload["current_episode"] or payload["episode"]) == 3
+
+    async def test_纯数字条目ID字段也认(self) -> None:
+        """有人把 「subject_id」 直接写成数字，别因为不是链接就丢掉。"""
+
+        bangumi = _S3Bangumi()
+        service = _service(NexusConfig(enable_cross_match=False), bangumi=bangumi)
+        note = await service.build(self._body(url="", subject_id="598058"))
+        assert note.payload["current_episode"] == 3
+
+    async def test_没有集数就不去猜(self) -> None:
+        bangumi = _S3Bangumi()
+        service = _service(NexusConfig(enable_cross_match=False), bangumi=bangumi)
+        note = await service.build(self._body(episode="", message=""))
+        assert note.payload["current_episode"] == 0
+        assert bangumi.episode_calls == 0
 
 
 class TestSilentKinds:

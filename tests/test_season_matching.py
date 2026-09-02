@@ -191,6 +191,11 @@ class _Bangumi:
         self.fetched.append(subject_id)
         return next((item for item in _subjects() if item.id == subject_id), None)
 
+    async def episodes(self, subject_id: int, *, limit: int = 100) -> list[Any]:
+        """这一组用例都不涉及连续编号还原，给个空表挡住那条支路就够。"""
+
+        return []
+
 
 class _Activity:
     def __init__(self) -> None:

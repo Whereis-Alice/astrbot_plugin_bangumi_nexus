@@ -573,7 +573,7 @@ class SearchService:
             width=conf.card_width,
             cover=cover,
             next_air=next_air,
-            highlight=upcoming.sort if upcoming else None,
+            highlight=upcoming.number if upcoming else None,
         )
         plain = _episode_plain(subject, episodes, upcoming, next_air)
         return Reply(
@@ -823,10 +823,10 @@ def _episode_plain(subject: Subject, episodes: Sequence, upcoming, next_air: str
     if next_air:
         lines.append(f"下一集：{next_air}")
     if upcoming is not None:
-        lines.append(f"即将播出：第 {upcoming.sort:g} 集 {upcoming.display_name}".rstrip())
+        lines.append(f"即将播出：第 {upcoming.number:g} 集 {upcoming.display_name}".rstrip())
     aired = [ep for ep in episodes if ep.airdate]
     for ep in aired[-8:]:
-        lines.append(f"· 第 {ep.sort:g} 集 {ep.airdate} {ep.display_name}".rstrip())
+        lines.append(f"· 第 {ep.number:g} 集 {ep.airdate} {ep.display_name}".rstrip())
     if not aired:
         lines.append("暂无分集信息。")
     return "\n".join(lines)

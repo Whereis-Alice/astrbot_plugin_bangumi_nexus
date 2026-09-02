@@ -1,7 +1,7 @@
 name: astrbot_plugin_bangumi_nexus
 display_name: 番剧中枢
 desc: 一站式番剧助手：Bangumi 日历与条目查询、跨源信息聚合（bangumi-data / anime1 / 長門番堂 / AGE / 萌娘百科）、追番清单、RSS 订阅推送、每日新番播报（可走人格转述）、随机抽番，全部带高质量卡片渲染与 Dashboard WebUI。
-version: v1.2.8
+version: v1.2.9
 author: Whereis-Alice
 repo: https://github.com/Whereis-Alice/astrbot_plugin_bangumi_nexus
 astrbot_version: ">=4.25,<5"

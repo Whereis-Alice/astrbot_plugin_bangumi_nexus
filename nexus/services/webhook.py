@@ -28,16 +28,22 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
-from ..models import Notification
+from ..models import Episode, Notification, Subject
 from ..titles import MATCH_THRESHOLD, qualify_season, similarity
 from .base import Deps
 from .notifier import Notifier
 from .search import RESOLVE_CANDIDATES, pick_by_season
-from .watchlist import STATUS_DROPPED, WatchlistService, backfill_progress, ensure_watch
+from .watchlist import (
+    NUMBERING_SLACK,
+    STATUS_DROPPED,
+    WatchlistService,
+    backfill_progress,
+    ensure_watch,
+)
 
 # 事件标识 → 本插件内部 kind。AutoBangumi 各版本字段名不统一，
 # 这里把见过的写法全列出来，识别不出再走字段推断。
@@ -305,6 +311,21 @@ class WebhookService:
             link,
             message,
         )
+        # 条目详情最多取一次，总集数和封面共用 —— 两处各自去查会把同一个 ID 打两遍；
+        # 虽然有 HTTP 缓存兜着，缓存过期那一刻仍然是实打实的两发请求。模板已经把这
+        # 两样都给全了（或明确不要封面）就一次都不查。
+        needs_subject = bool(subject_id) and (
+            not total or (not cover and self._deps.conf.enable_cross_match)
+        )
+        subject = await self._subject_for(subject_id) if needs_subject else None
+        if subject is not None:
+            # 模板里没写总集数就从条目上取 —— 卡片上那句「共 12 集」不该因为用户的
+            # body 少填一个占位符就消失，回填时的连续编号判定也要靠它。
+            total = total or int(subject.total_episodes or subject.eps or 0)
+        if subject_id:
+            # 季内集数：只给了连续编号（第三季的第 3 集写成 27）时，去分集表把它换回
+            # 3。这一步只在编号明显超出总集数时才真的发请求，普通番剧零额外开销。
+            current = current or await self._inner_for(subject_id, episode, total)
 
         lines: list[str] = []
         inner = current or episode
@@ -342,7 +363,7 @@ class WebhookService:
         # 字符串，不会出现「卡片写第一季、进度记到第三季」这种自相矛盾。
         display_title = qualify_season(title, season)
         if not cover:
-            cover = await self._cover_for(display_title, subject_id)
+            cover = await self._cover_for(display_title, subject_id, subject=subject)
 
         subtitle = KIND_PHRASE.get(kind, "番剧通知")
         if marker and kind == "new_episode":
@@ -364,21 +385,22 @@ class WebhookService:
             },
         )
 
-    async def _cover_for(self, title: str, subject_id: int = 0) -> str:
+    async def _cover_for(
+        self, title: str, subject_id: int = 0, *, subject: Subject | None = None
+    ) -> str:
         """上游没给海报时去 Bangumi 找一张，失败就算了。
 
-        有条目 ID 就直接取那一条 —— 这是唯一不会认错季度的路径。没有 ID 才退回
-        搜索，并且多取几条交给 「pick_by_season」 重排：Bangumi 的 「sort=match」
-        无视季度后缀，第三季的关键词照样把第一季排在首位，只取第一条必然拿错封面。
+        有条目 ID 就直接取那一条 —— 这是唯一不会认错季度的路径；「subject」 让调用方把
+        已经取过的详情递进来，省掉重复请求。没有 ID 才退回搜索，并且多取几条交给
+        「pick_by_season」 重排：Bangumi 的 「sort=match」 无视季度后缀，第三季的关键词
+        照样把第一季排在首位，只取第一条必然拿错封面。
         """
         deps = self._deps
         if not title or not deps.conf.enable_cross_match:
             return ""
         if subject_id:
-            try:
-                subject = await deps.hub.bangumi.subject(subject_id)
-            except Exception:  # noqa: BLE001 - 条目可能已被删除或 API 抖动
-                subject = None
+            if subject is None:
+                subject = await self._subject_for(subject_id)
             if subject and subject.image:
                 return subject.image
         try:
@@ -387,6 +409,47 @@ class WebhookService:
             return ""
         picked = pick_by_season(title, found)
         return picked.image if picked else ""
+
+    async def _subject_for(self, subject_id: int) -> Subject | None:
+        """取一次条目详情，取不到返回 None（调用方一律当「不知道」处理）。
+
+        故意不受 「enable_cross_match」 约束 —— 那个开关管的是「除 Bangumi 之外还查
+        几家」（见配置项说明「关闭则只查 Bangumi，更快」），而这里查的正是 Bangumi，
+        且用的是上游给定的条目 ID，零歧义、零搜索。
+        """
+        try:
+            return await self._deps.hub.bangumi.subject(subject_id)
+        except Exception:  # noqa: BLE001 - 条目可能已被删除或 API 抖动
+            return None
+
+    async def _inner_for(self, subject_id: int, episode: int, total: int) -> int:
+        """把字幕组的连续编号换回季内集数，换不出来返回 0。
+
+        为什么需要这一步：ani-rss 3.x 有 「${currentEpisodeNumber}」 这个字段，但用户的
+        body 模板不一定填 —— 旧模板、别的下载器都可能只给一个编号。缺了它，年番第三季
+        的第 3 集推过来就是个 27：卡片写「第 27 集 · 共 12 集」，进度回填也只能整条放弃。
+
+        Bangumi 的分集表恰好同时给两个数：「sort」 是从第一季数起的连续编号，「ep」 是
+        季内集数（第三季第 1 集 = 「ep 1 / sort 25」）。拿上游那个数去对 「sort」，命中
+        就读出 「ep」。对不上宁可返回 0 —— 猜错季度比不猜更糟。
+
+        只在编号明显超出总集数时才查，容差与回填共用 「NUMBERING_SLACK」：普通番剧两个
+        数本来就一样，不该为此多打一次 API。
+        """
+        if not subject_id or episode <= 0 or total <= 0:
+            return 0
+        if episode <= total + NUMBERING_SLACK:
+            return 0
+        try:
+            episodes = await self._deps.hub.bangumi.episodes(subject_id)
+        except Exception:  # noqa: BLE001 - 分集表只是增强，拿不到就退回原样
+            return 0
+        inner = inner_episode(episodes, episode)
+        if inner:
+            self._deps.activity.info(
+                "webhook", f"连续编号 {episode} 按 Bangumi 分集表还原为第 {inner} 集"
+            )
+        return inner
 
     # ------------------------------------------------------------------
     # 路由
@@ -605,6 +668,25 @@ def _progress_line(season: int, episode: int, current: int, total: int) -> str:
     return f"进度：{text}"
 
 
+def inner_episode(episodes: Sequence[Episode], absolute: int) -> int:
+    """在 Bangumi 分集表里按连续编号反查季内集数，查不到返回 0。
+
+    只认 「sort」 的精确匹配。差一点就放弃是有意的：这个数会直接写进追番进度，
+    宁可这次不动，也不要把第三季的第 3 集记成第 27 集或者第 4 集。
+
+    有些条目的 「ep」 字段是空的，此时用下标 +1 兜底 —— 上游返回已按 「sort」
+    升序排好，同一季内的下标顺序就是集数顺序。
+    """
+    if absolute <= 0:
+        return 0
+    for index, episode in enumerate(episodes):
+        if int(episode.sort) != absolute:
+            continue
+        inner = int(episode.ep or 0)
+        return inner if inner > 0 else index + 1
+    return 0
+
+
 def parse_subject_id(*texts: str) -> int:
     """从链接或正文里抠出 Bangumi 条目 ID，抠不到返回 0。
 
@@ -701,6 +783,7 @@ __all__ = [
     "WebhookService",
     "classify",
     "fold_event",
+    "inner_episode",
     "parse_episode_marker",
     "parse_subject_id",
 ]

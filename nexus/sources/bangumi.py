@@ -373,7 +373,11 @@ class BangumiSource:
         return cast_from_characters(raw, limit=limit)
 
     async def episodes(self, subject_id: int, *, limit: int = 100) -> list[Episode]:
-        """正片分集（type=0）。"""
+        """正片分集（type=0）。
+
+        「sort」 和 「ep」 一起留下 —— 年番续季里这两个数不是一回事，
+        字幕组按前者命名、观众按后者数集，详见 「Episode」 的注释。
+        """
 
         try:
             raw = await self._http.fetch_json(
@@ -398,6 +402,7 @@ class BangumiSource:
                 Episode(
                     id=int(item.get("id") or 0),
                     sort=float(item.get("sort") or item.get("ep") or 0),
+                    ep=float(item.get("ep") or 0),
                     name=str(item.get("name") or "").strip(),
                     name_cn=str(item.get("name_cn") or "").strip(),
                     airdate=str(item.get("airdate") or "").strip(),

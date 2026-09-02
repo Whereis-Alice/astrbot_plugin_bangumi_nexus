@@ -961,15 +961,15 @@ def build_episode_card(
     highlight: float | None = None,
     version: str = "",
 ) -> str:
-    """分集/放送时间卡。「highlight」 是下一集的 sort，会被标成强调色。"""
+    """分集/放送时间卡。「highlight」 是下一集的 「number」（季内集数），会被标成强调色。"""
 
     resolved = theme if isinstance(theme, Theme) else resolve_theme(theme)
     rows = []
     for episode in episodes[:16]:
-        tail = "即将放送" if highlight is not None and episode.sort == highlight else ""
+        tail = "即将放送" if highlight is not None and episode.number == highlight else ""
         rows.append(
             (
-                f"{episode.sort:g}",
+                f"{episode.number:g}",
                 clip(episode.display_name, 42),
                 episode.airdate or "待定",
                 tail,

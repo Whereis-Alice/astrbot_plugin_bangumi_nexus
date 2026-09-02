@@ -84,10 +84,17 @@ class CalendarDay:
 
 @dataclass(frozen=True)
 class Episode:
-    """单集信息。"""
+    """单集信息。
+
+    「sort」 和 「ep」 在年番上会分道扬镳：Bangumi 给《超超超超超喜欢你的100个女朋友
+    第三季》的第 1 集记的是 「ep=1、sort=25」 —— 前两季各 12 集，连续编号从 25 起算。
+    字幕组的文件名跟 「sort」 走，观众数的却是 「ep」，所以两个都得留着：
+    「number」 用来展示和记进度，「sort」 用来跟下载器给的编号对账。
+    """
 
     id: int
     sort: float
+    ep: float = 0.0
     name: str = ""
     name_cn: str = ""
     airdate: str = ""
@@ -95,8 +102,13 @@ class Episode:
     summary: str = ""
 
     @property
+    def number(self) -> float:
+        """季内集数。上游没给 「ep」 时退回 「sort」，至少不会是 0。"""
+        return self.ep or self.sort
+
+    @property
     def display_name(self) -> str:
-        return self.name_cn or self.name or f"第 {self.sort:g} 话"
+        return self.name_cn or self.name or f"第 {self.number:g} 话"
 
 
 # ---------------------------------------------------------------------------

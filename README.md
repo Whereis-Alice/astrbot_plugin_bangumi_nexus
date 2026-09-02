@@ -778,13 +778,19 @@ X-Webhook-Token: 你在第 1 步设的令牌
 {"event":"${action}","title":"${title}","season":"${season}","episode":"${episode}","currentEpisodeNumber":"${currentEpisodeNumber}","totalEpisodeNumber":"${totalEpisodeNumber}","poster_url":"${image}","url":"${bgmUrl}","subgroup":"${subgroup}","score":"${score}","message":"${message}"}
 ```
 
-> 💡 `currentEpisodeNumber` / `totalEpisodeNumber` 这两项**别省**。`${episode}` 给的是字幕组的连续编号 ——
+> 💡 `currentEpisodeNumber` / `totalEpisodeNumber` 这两项**最好别省**。`${episode}` 给的是字幕组的连续编号 ——
 > 年番第三季的第 9 集会写成 `29`，写进「全 12 话」的追番条目会直接变成 `12/12` 假完结。
-> 只有这两个字段能算出「这季的第几集 / 共几集」，卡片和进度条才对得上。
+> 只有这两个字段能一步算出「这季的第几集 / 共几集」，卡片和进度条才对得上。
 >
-> 💡 `url` 里的 `${bgmUrl}` 也别省。它展开出来是 Bangumi 条目链接，条目 ID 是全链路**唯一零歧义**
+> 用的是 ani-rss 3.0 之前的版本、或者别的下载器给不出这两个字段？从 v1.2.9 起也能work：
+> 只要 `url` 里带着 `${bgmUrl}`，插件会拿 Bangumi 的分集表把连续编号还原回季内集数
+> （`27` → 第 `3` 集），近期活动里会留一行还原记录。只在编号明显超出总集数时才查，普通番剧没有额外开销。
+> 不过填上这两个字段仍然是最准的做法 —— 不必查库，也不依赖分集表的完整度。
+>
+> 💡 `url` 里的 `${bgmUrl}` **千万别省**。它展开出来是 Bangumi 条目链接，条目 ID 是全链路**唯一零歧义**
 > 的作品标识 —— Bangumi 的搜索压根不认季度后缀（搜「某番 第三季」还是把第一季排在最前），
-> 有了 ID 就不用猜：卡片标题、封面、总集数、自动建的追番条目全部落在正确的那一季上。
+> 有了 ID 就不用猜：卡片标题、封面、总集数、自动建的追番条目、以及上面那套连续编号还原，
+> 全部落在正确的那一季上。
 >
 > ⚠️ **每个占位符都要用引号包住，`${message}` 也一样。**
 > ani-rss 只帮你转义 `${message}` 的内容（引号、换行都处理好了），**但不会替你补外层引号** ——

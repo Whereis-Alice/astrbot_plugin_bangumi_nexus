@@ -39,6 +39,11 @@ _SEASON_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bs([0-9]{1,2})\b", re.I), r"#\1"),
 )
 
+#: 打好标记后的串里的季数标记，用来把「第 2 季」和「第 3 季」区分开。
+#: 注意它只在 「_season_marked」 的产物里出现，归一化键里读不到 —— 「#」 落在
+#: 「_PUNCTUATION」 的 「!-/」 区间里，压成键的那一步会把它抹掉。
+_SEASON_MARK = re.compile(r"#([0-9]+)")
+
 _CN_DIGITS = {
     "一": "1",
     "二": "2",
@@ -51,6 +56,9 @@ _CN_DIGITS = {
     "九": "9",
     "十": "10",
 }
+
+#: 阿拉伯数字 → 中文数字。直接反转 「_CN_DIGITS」，免得同一张对照表写两遍还容易写歪。
+_AR_TO_CN = {int(value): cn for cn, value in _CN_DIGITS.items()}
 
 #: 标题里频繁出现、对区分作品毫无帮助的噪声词。
 _NOISE_WORDS = (
@@ -76,11 +84,13 @@ def half_width(text: str) -> str:
     return unicodedata.normalize("NFKC", text or "")
 
 
-def normalize(text: str) -> str:
-    """把任意写法的标题压成可比较的归一化键。
+def _season_marked(text: str) -> str:
+    """半角化 + 小写 + 把各种季度写法统一成 「#N」，其余字符原样保留。
 
-    小写 → NFKC → 中文数字季数转阿拉伯数字 → 抹标点空白 → 去噪声词。
-    结果只用于比较，不用于展示。
+    为什么要把归一化拆成两步：压成键的那一步会把 「#」 当标点抹掉（它落在
+    「_PUNCTUATION」 的 「!-/」 区间里），于是归一化键里只剩一个光秃秃的数字，
+    再也分不清「第 3 季」和标题里本来就有的 「3」。想读季数就必须在抹标点之前
+    截一刀 —— 这个函数就是那一刀。
     """
 
     value = half_width(str(text or "")).lower()
@@ -88,17 +98,84 @@ def normalize(text: str) -> str:
         value = pattern.sub(replacement, value)
     for cn, arabic in _CN_DIGITS.items():
         value = value.replace(f"#{cn}", f"#{arabic}")
-    value = _PUNCTUATION.sub("", value)
+    return value
+
+
+def _strip_key(marked: str) -> str:
+    """把已打好季度标记的串压成最终归一化键：抹标点空白、去噪声词。"""
+
+    value = _PUNCTUATION.sub("", marked)
     for noise in _NOISE_WORDS:
         if value != noise:
             value = value.replace(noise, "")
     return value
 
 
-def base_title(text: str) -> str:
-    """去掉季数标记后的主干，用于「第二季」和第一季互相牵连的场景。"""
+def normalize(text: str) -> str:
+    """把任意写法的标题压成可比较的归一化键。
 
-    return re.sub(r"#[0-9]+", "", normalize(text))
+    小写 → NFKC → 中文数字季数转阿拉伯数字 → 抹标点空白 → 去噪声词。
+    结果只用于比较，不用于展示。
+    """
+
+    return _strip_key(_season_marked(text))
+
+
+def base_title(text: str) -> str:
+    """去掉季数标记后的主干，用于「第二季」和第一季互相牵连的场景。
+
+    必须在 「_season_marked」 的产物上剪，不能在归一化键上剪 —— 键里的 「#」
+    已经被抹掉，正则 「#[0-9]+」 一个都匹配不上，季数会原封不动留在主干里。
+    """
+
+    return _strip_key(_SEASON_MARK.sub("", _season_marked(text)))
+
+
+def _marked_season(marked: str) -> int:
+    """从已打好标记的串里读季数。内部用，省掉重复调用 「_season_marked」。"""
+
+    match = _SEASON_MARK.search(marked)
+    return int(match.group(1)) if match else 0
+
+
+def season_number(text: str) -> int:
+    """读出标题里显式写明的季数；没有季度标记返回 0。
+
+    0 的语义是「未知」而不是「第一季」，这个区分是刻意的：下载器推来的标题、
+    Bangumi 的首季条目大多根本不写季数，一旦把「没写」当成「第 1 季」，
+    第三季的更新通知就再也匹配不上表里那条无季标的旧记录了。
+    """
+
+    return _marked_season(_season_marked(text))
+
+
+def season_conflict(left: str, right: str) -> bool:
+    """判断两个标题是否分属不同季。
+
+    只有**双方都写明**季数、且数字不同才算冲突。一侧没写就当未知、继续宽容匹配 ——
+    否则「超超超超超喜欢你的100个女朋友」（表里的旧条目）会被判定成和
+    「……第三季」（推送标题）无关，那个会话将永远收不到通知。
+    """
+
+    left_season, right_season = season_number(left), season_number(right)
+    return bool(left_season and right_season and left_season != right_season)
+
+
+def qualify_season(title: str, season: int) -> str:
+    """把下载器分成两个字段给的「标题 + 季号」合成一个能直接匹配的完整标题。
+
+    ani-rss 之类的下载器把季度单独放在 「season」 字段，标题里往往一个字都不提，
+    于是「第三季」的更新看上去和第一季长得一模一样。这里补回后缀，让卡片、
+    追番匹配、进度回填三处共用同一个带季度的标题。
+
+    第 1 季刻意不加后缀：首季条目几乎都不写「第一季」，硬加反而制造出
+    「双方都写明且不同」的显式冲突，把本来该命中的记录排除掉（见 「season_conflict」）。
+    """
+
+    if season <= 1 or not title or season_number(title):
+        return title
+    suffix = _AR_TO_CN.get(season, str(season))
+    return f"{title} 第{suffix}季"
 
 
 def alias_keys(*titles: str | Iterable[str] | None) -> frozenset[str]:
@@ -118,11 +195,21 @@ def alias_keys(*titles: str | Iterable[str] | None) -> frozenset[str]:
 
 
 def similarity(left: str, right: str) -> float:
-    """0~1 的标题相似度，两侧先归一化。子串关系直接给高分。"""
+    """0~1 的标题相似度，两侧先归一化。子串关系直接给高分。
 
-    a, b = normalize(left), normalize(right)
+    季数显式冲突时一律压到 「MATCH_THRESHOLD」 之下：同一部作品的不同季主干完全
+    一致，「#2」和「#3」的字符相似度能到 0.94，光靠字符比较必然串台 —— 第三季的
+    更新会被回填进第二季的追番记录。反之只要有一侧没写季数就保持宽容，理由见
+    「season_conflict」。
+    """
+
+    marked_left, marked_right = _season_marked(left), _season_marked(right)
+    a, b = _strip_key(marked_left), _strip_key(marked_right)
     if not a or not b:
         return 0.0
+    left_season, right_season = _marked_season(marked_left), _marked_season(marked_right)
+    if left_season and right_season and left_season != right_season:
+        return min(SequenceMatcher(None, a, b).ratio(), MATCH_THRESHOLD - 0.02)
     if a == b:
         return 1.0
     if a in b or b in a:

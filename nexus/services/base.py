@@ -221,6 +221,16 @@ async def cover_map(
     return {key: uris[url] for key, url in wanted if uris.get(url)}
 
 
+def llm_available(deps: Deps) -> bool:
+    """当前运行时有没有可调用的 LLM 入口。
+
+    用来区分「模型链路根本没配」和「这次调用失败了」：前者重试毫无意义（还白等一次
+    退避），后者往往几秒内自愈，值得再试一次。
+    """
+
+    return getattr(deps.context, "llm_generate", None) is not None
+
+
 async def llm_text(
     deps: Deps,
     prompt: str,

@@ -995,6 +995,7 @@ class _Watchlist:
     def __init__(self, *, has: tuple[str, ...] = ()) -> None:
         self._has = has
         self.asked: list[str] = []
+        self.resolved: list[tuple[str, int]] = []
 
     async def matching_titles(self, umo: str, title: str, *, threshold: float = 0.0) -> list[Any]:
         self.asked.append(umo)
@@ -1003,9 +1004,10 @@ class _Watchlist:
         row = SimpleNamespace(id=9, umo=umo, title=title, status="watching", progress=0, total=0)
         return [row]
 
-    async def resolve_subject(self, title: str) -> Any:
+    async def resolve_subject(self, title: str, *, subject_id: int = 0) -> Any:
         """线上会去 Bangumi 借元数据；这里一律搜不到，走「宁可少几个字段」那条路。"""
 
+        self.resolved.append((title, subject_id))
         return None
 
 

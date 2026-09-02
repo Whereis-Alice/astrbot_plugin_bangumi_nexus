@@ -19,9 +19,13 @@ from astrbot.core.message.message_event_result import MessageChain
 from ..models import FeedItem, Notification
 from ..platforms import Instances, describe, live_platforms, pick_platform_id, remap_umo
 from ..render import build_feed_card, build_notice_card
-from .base import Deps, Reply, cover_uri, llm_text, make_card, style_for
+from .base import Deps, Reply, cover_uri, llm_available, llm_text, make_card, style_for
 
 DEDUP_CAPACITY = 500
+#: 人格转述失败后重试前的等待秒数。压垮人格链路的多是瞬时故障 —— LLM 网关
+#: 的 「invalid_grant」、上游 429 限流 —— 大多在几秒内自愈，等一下再试一次的
+#: 命中率远高于立刻重试，也远好过直接放弃让卡片开天窗。
+PERSONA_RETRY_DELAY = 1.5
 KIND_EYEBROW = {
     "new_episode": "NEW EPISODE",
     "download_start": "DOWNLOADING",
@@ -200,26 +204,44 @@ class Notifier:
 
         人格提示词走 「system_prompt」，任务指令走 「prompt」 —— 这样人格决定语气、
         指令只约束内容，不会把「你是某某」硬塞进任务里冲掉用户配的人格。
-        """
-        return await self.speak(notification.plain_text(), umo)
 
-    async def speak(self, facts: str, umo: str) -> str:
-        """给定事实文本，让人格用自己的口吻转述一句。"""
+        转述彻底失败时给一句确定性兜底文案（「persona_fallback_line」）：卡片上
+        「播报」那一段是固定版式的一部分，空着会让同一批通知长得忽有忽无，用户只会
+        以为插件坏了。兜底文案不经过 LLM，所以永远不会再失败。
+        """
+        fallback = _fallback_line(notification) if self._deps.conf.persona_fallback_line else ""
+        return await self.speak(notification.plain_text(), umo, fallback=fallback)
+
+    async def speak(self, facts: str, umo: str, *, fallback: str = "") -> str:
+        """给定事实文本，让人格用自己的口吻转述一句。
+
+        失败会重试一次（间隔 「PERSONA_RETRY_DELAY」）。只在真的挂着 LLM 提供商时
+        才重试 —— 没配提供商的用户每条通知都白等一次退避毫无意义。
+        """
         deps = self._deps
         conf = deps.conf
         if not facts.strip():
-            return ""
+            return fallback
         persona_prompt = await self._persona_prompt(umo)
         prompt = f"{conf.persona_instruction}\n\n通知内容：\n{facts}"
-        text = await llm_text(
-            deps,
-            prompt,
-            provider_id=conf.persona_provider_id,
-            system_prompt=persona_prompt,
-            umo=umo,
-            limit=max(40, conf.persona_max_chars),
-        )
-        return text.replace("\n", " ").strip()
+        attempts = 2 if llm_available(deps) else 1
+        for attempt in range(1, attempts + 1):
+            text = await llm_text(
+                deps,
+                prompt,
+                provider_id=conf.persona_provider_id,
+                system_prompt=persona_prompt,
+                umo=umo,
+                limit=max(40, conf.persona_max_chars),
+            )
+            spoken = text.replace("\n", " ").strip()
+            if spoken:
+                return spoken
+            if attempt < attempts:
+                await asyncio.sleep(PERSONA_RETRY_DELAY)
+        if fallback:
+            deps.activity.warn("notify", "人格转述两次都没成，这条改用兜底文案")
+        return fallback
 
     async def _persona_prompt(self, umo: str) -> str:
         """取 AstrBot 里配置的人格提示词。
@@ -433,4 +455,16 @@ def _feed_items(payload: Mapping[str, object]) -> tuple[FeedItem, ...]:
     return tuple(item for item in raw if isinstance(item, FeedItem))
 
 
-__all__ = ["ERROR_KINDS", "KIND_EYEBROW", "Notifier"]
+def _fallback_line(notification: Notification) -> str:
+    """人格转述失败时顶上的确定性文案。
+
+    刻意写得很短、很中性：它的职责只是把卡片的「播报」位填满，不是假装成人格。
+    """
+
+    title = notification.title or "番剧"
+    if notification.subtitle:
+        return f"《{title}》{notification.subtitle}。"
+    return f"《{title}》有新动态。"
+
+
+__all__ = ["ERROR_KINDS", "KIND_EYEBROW", "PERSONA_RETRY_DELAY", "Notifier"]

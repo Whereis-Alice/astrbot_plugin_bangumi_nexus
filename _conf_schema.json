@@ -185,6 +185,12 @@
     "hint": "超出会截断，防止人格发挥过头把卡片挤到看不见。",
     "default": 180
   },
+  "persona_fallback_line": {
+    "description": "转述失败时用兜底文案填「播报」位",
+    "type": "bool",
+    "hint": "人格调用会重试一次；两次都失败（模型限流、网关抖动）时用一句固定文案顶上，保证卡片版式一致。关闭则失败时那一段留空。",
+    "default": true
+  },
   "rss_enabled": {
     "description": "启用 RSS 订阅轮询",
     "type": "bool",

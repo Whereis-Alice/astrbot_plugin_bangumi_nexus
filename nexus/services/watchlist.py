@@ -27,6 +27,11 @@ STATUS_PLANNED = "planned"
 STATUS_FINISHED = "finished"
 STATUS_DROPPED = "dropped"
 
+#: 允许「上游集数超出总集数」的宽容额度。SP/OVA 被编成第 13 集这种情况差 1~2 集，
+#: 封顶到全话数是对的；差得更多（年番第三季给出连续编号 29）说明上游用的是
+#: 另一套编号体系，硬封顶会把 12/12 写成假完结，这种只能拒绝回填。
+NUMBERING_SLACK = 2
+
 
 class WatchlistService:
     """每个会话一份追番表：加入、弃坑、推进度、看全表。"""
@@ -271,14 +276,19 @@ class WatchlistService:
         hits = [item for item in items if similarity(item.title, title) >= threshold]
         return sorted(hits, key=lambda item: similarity(item.title, title), reverse=True)
 
-    async def resolve_subject(self, title: str) -> Subject | None:
+    async def resolve_subject(self, title: str, *, subject_id: int = 0) -> Subject | None:
         """按名字找 Bangumi 条目 —— 自动建条目时用来补封面、总集数、评分。
 
         单独包一层而不是让调用方直接摸 「self._search」：自动建条目跑在 Webhook /
         定时任务这类后台链路上，搜索失败只该让新条目「少几个字段」，不该把整条
         请求带崩，所以异常在这里就吞掉并留一条运行记录。
+
+        给了 「subject_id」 就直接取那一条。上游链接里带着条目 ID 时它比任何名字
+        搜索都准 —— 名字搜索认不出季度后缀，第三季的更新会拿到第一季的元数据。
         """
         try:
+            if subject_id:
+                return await self._deps.hub.bangumi.subject(subject_id)
             return await self._search.resolve(title)
         except Exception as error:  # noqa: BLE001 - 搜不到就退化成最简条目
             self._deps.activity.warn("watchlist", f"自动建条目查询「{title}」失败：{error}")
@@ -293,6 +303,7 @@ async def backfill_progress(
     episode: int,
     targets: Sequence[str],
     channel: str = "watch",
+    total: int = 0,
 ) -> int:
     """把追番进度推到指定集数，返回实际改动的条目数。
 
@@ -302,7 +313,10 @@ async def backfill_progress(
     三条不变量：
 
     * **只往前，不往后**。补种老集数、字幕组补发前几集都不该把用户已看到的进度打回去。
-    * **总集数封顶**。有的源会把 SP/OVA 编成 「13」，硬写进去会让进度条超过 100%。
+    * **总集数封顶，但差太多就不写**。有的源把 SP/OVA 编成 「13」，封顶到 12 是对的；
+      年番第三季却可能给出「第 29 集」这种从首季数起的连续编号，封顶会把它写成
+      12/12 —— 一部还在播的番凭空完结。差额超过 「NUMBERING_SLACK」 时宁可不动，
+      并留一条运行记录让用户知道为什么没动。
     * **一部番只认最像的那一条**。同一会话里 「进击的巨人」 和 「进击的巨人 最终季」
       都可能匹配上，全改会串台，所以只动相似度最高的那条。
     """
@@ -321,11 +335,25 @@ async def backfill_progress(
         for item in hits[:1]:
             if item.progress >= episode:
                 continue
-            capped = min(episode, item.total) if item.total else episode
+            ceiling = total or item.total
+            capped = episode
+            if ceiling and episode > ceiling:
+                if episode - ceiling > NUMBERING_SLACK:
+                    deps.activity.warn(
+                        channel,
+                        f"「{item.title}」上游给的第 {episode} 集比全 {ceiling} 话超出太多，"
+                        "疑似字幕组连续编号，本次不回填",
+                    )
+                    continue
+                capped = ceiling
             if capped <= item.progress:
                 continue
+            fields: dict[str, object] = {"progress": capped, "updated_at": time.time()}
+            if total and not item.total:
+                # 顺手补上条目缺失的总集数（不覆盖已有值），下一次回填的封顶才有依据。
+                fields["total"] = total
             try:
-                await deps.store.update_watch(item.id, progress=capped, updated_at=time.time())
+                await deps.store.update_watch(item.id, **fields)
             except Exception as error:  # noqa: BLE001
                 deps.activity.warn(channel, f"回填进度失败：{error}")
                 continue
@@ -343,6 +371,7 @@ async def ensure_watch(
     cover: str = "",
     total: int = 0,
     channel: str = "watch",
+    subject_id: int = 0,
 ) -> tuple[str, ...]:
     """把还没进追番表的番自动补一条，返回真正新建了条目的会话。
 
@@ -380,8 +409,10 @@ async def ensure_watch(
         if not looked_up:
             # 一条事件推给多个会话时元数据是同一份，Bangumi 只查一次。
             looked_up = True
-            subject = await watchlist.resolve_subject(title)
-        item = _auto_item(session, title, subject, cover=cover, total=total)
+            subject = await watchlist.resolve_subject(title, subject_id=subject_id)
+        item = _auto_item(
+            session, title, subject, cover=cover, total=total, trusted=bool(subject_id)
+        )
         try:
             stored = await deps.store.upsert_watch(item)
         except Exception as error:  # noqa: BLE001 - 超上限或写库失败只跳过这个会话
@@ -393,7 +424,13 @@ async def ensure_watch(
 
 
 def _auto_item(
-    umo: str, title: str, subject: Subject | None, *, cover: str = "", total: int = 0
+    umo: str,
+    title: str,
+    subject: Subject | None,
+    *,
+    cover: str = "",
+    total: int = 0,
+    trusted: bool = False,
 ) -> WatchItem:
     """给「自动建条目」挑标题与元数据。
 
@@ -402,6 +439,10 @@ def _auto_item(
     所以 Bangumi 的规范名只在足够接近时才采用；只是原名对得上（推送给的是日文名、
     Bangumi 返回中文名）就保留推送原名、只借元数据；连原名都对不上就当没搜到，
     宁可少几个字段，也不要挂错封面和集数。
+
+    「trusted」 表示条目不是猜出来的（上游直接给了 Bangumi 条目 ID），这时跳过相似度
+    体检直接采用规范名 —— 「君のことが大大大大大好きな100人の彼女 第3期」 和中文推送名
+    的字符相似度接近 0，按名字判会被当成搜错，反而丢掉一份完全正确的元数据。
     """
     fallback = WatchItem(
         id=0,
@@ -414,7 +455,7 @@ def _auto_item(
     )
     if subject is None:
         return fallback
-    canonical = similarity(subject.display_name, title) >= MATCH_THRESHOLD
+    canonical = trusted or similarity(subject.display_name, title) >= MATCH_THRESHOLD
     if not canonical and similarity(subject.alt_name, title) < MATCH_THRESHOLD:
         return fallback
     item = subject_to_item(umo, subject)
@@ -461,6 +502,7 @@ def subject_to_item(umo: str, subject: Subject) -> WatchItem:
 
 __all__ = [
     "MATCH_THRESHOLD",
+    "NUMBERING_SLACK",
     "STATUS_DROPPED",
     "STATUS_FINISHED",
     "STATUS_PLANNED",

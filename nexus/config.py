@@ -199,6 +199,9 @@ class NexusConfig:
     persona_provider_id: str = ""
     persona_instruction: str = DEFAULT_PERSONA_INSTRUCTION
     persona_max_chars: int = 180
+    #: 人格转述两次都失败时，用一句确定性文案填「播报」位。默认开 —— 卡片版式里
+    #: 那一段是固定结构，空着会让同一批通知长得忽有忽无，比文案略生硬糟糕得多。
+    persona_fallback_line: bool = True
     # RSS
     rss_enabled: bool = True
     rss_interval_minutes: int = 15
@@ -330,6 +333,7 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
             _get(raw, "persona_instruction", ""), DEFAULT_PERSONA_INSTRUCTION
         ),
         persona_max_chars=_as_int(_get(raw, "persona_max_chars", 180), 180, low=30, high=800),
+        persona_fallback_line=_as_bool(_get(raw, "persona_fallback_line", True), True),
         rss_enabled=_as_bool(_get(raw, "rss_enabled", True), True),
         rss_interval_minutes=_as_int(
             _get(raw, "rss_interval_minutes", 15), 15, low=MIN_RSS_INTERVAL_MINUTES, high=1440

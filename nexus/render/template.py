@@ -1097,13 +1097,9 @@ def build_feed_card(
         rows.append((str(index), clip(item.title, 66), note, ""))
     blocks = []
     if persona_text:
-        blocks.append(
-            _block(
-                "播报",
-                f'<div class="para"><em>{esc(persona_text)}</em></div>',
-                hint="由人格生成",
-            )
-        )
+        # 不标「由人格生成」：这张卡的播报位只可能是人格转述，标注是纯噪声，
+        # 兜底文案上线后还会变成假话。
+        blocks.append(_block("播报", f'<div class="para"><em>{esc(persona_text)}</em></div>'))
     if cover:
         blocks.append(
             _block(
@@ -1202,11 +1198,7 @@ def build_notice_card(
     resolved = theme if isinstance(theme, Theme) else resolve_theme(theme)
     blocks = []
     if persona_text:
-        blocks.append(
-            _block(
-                "播报", f'<div class="para"><em>{esc(persona_text)}</em></div>', hint="由人格生成"
-            )
-        )
+        blocks.append(_block("播报", f'<div class="para"><em>{esc(persona_text)}</em></div>'))
     if cover:
         blocks.append(
             _block("封面", '<div class="tile plain">' + _thumb(cover, title, size="lg") + "</div>")

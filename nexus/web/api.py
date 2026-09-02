@@ -203,6 +203,7 @@ CONF_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "persona_provider_id",
             "persona_instruction",
             "persona_max_chars",
+            "persona_fallback_line",
         ),
     ),
     (

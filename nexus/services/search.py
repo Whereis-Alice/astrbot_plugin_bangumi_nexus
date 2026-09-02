@@ -25,7 +25,14 @@ from ..render import (
     flatten,
 )
 from ..sources.bangumi import TYPE_ANIME, TYPE_BOOK, is_movie, staff_from_infobox
-from ..titles import MATCH_THRESHOLD, parse_broadcast, season_code, season_label, similarity
+from ..titles import (
+    MATCH_THRESHOLD,
+    parse_broadcast,
+    season_code,
+    season_label,
+    season_number,
+    similarity,
+)
 from .base import (
     Deps,
     Reply,
@@ -52,6 +59,11 @@ LONG_RUN_LIMIT = 8
 
 #: 今日放送主栏最多列几部。多出来的部分在卡片副标题上明说，而不是悄悄截断。
 TODAY_LIMIT = 12
+
+#: 「resolve」 先拉几条候选、再自己按季度重排。Bangumi 的 「sort=match」 完全无视季度
+#: 后缀 —— 实测搜「……第三季」和搜无季标的原名返回的十条结果一模一样，且首季永远排在
+#: 最前。10 条足够把同一部作品的各季全覆盖进来，又不至于把无关条目拖进重排。
+RESOLVE_CANDIDATES = 10
 
 
 async def _ready(value: object) -> object:
@@ -152,6 +164,34 @@ def _in_watchlist(subject: Subject, titles: Sequence[str]) -> bool:
     return False
 
 
+def pick_by_season(query: str, candidates: Sequence[Subject]) -> Subject | None:
+    """在候选里挑出与查询季度吻合的那一条。
+
+    排序键三段：季度是否对上 → 标题相似度 → API 原序。查询本身没写季数时直接返回
+    Bangumi 的第一条，一个字都不改 —— 「/bgm 迷宫饭」这类日常查询本来就该跟随官方
+    相关性排序，没必要为了修季度问题动它。
+
+    一条候选都没写季数、恰好又没有对得上的季时，相似度这一段会把「无季标的主条目」
+    排在「明确是别的季」前面（「similarity」 对季数冲突有惩罚）。宁可退回主条目，
+    也不要把第三季的通知记到第二季头上。
+    """
+
+    if not candidates:
+        return None
+    wanted = season_number(query)
+    if not wanted:
+        return candidates[0]
+
+    def rank(pair: tuple[int, Subject]) -> tuple[int, float, int]:
+        index, subject = pair
+        seasons = {season_number(name) for name in (subject.name_cn, subject.name) if name}
+        names = [name for name in (subject.display_name, subject.name) if name]
+        score = max((similarity(query, name) for name in names), default=0.0)
+        return (0 if wanted in seasons else 1, -score, index)
+
+    return min(enumerate(candidates), key=rank)[1]
+
+
 class SearchService:
     """条目检索与日历卡。"""
 
@@ -165,7 +205,12 @@ class SearchService:
         """把「关键词或条目 ID」统一解析成一个条目。
 
         纯数字直接当 ID 走详情接口 —— 这是上游 「/bgm 302286」 的用法；
-        否则搜一次取第一条。
+        否则搜一批候选，再按季度重排取头一条。
+
+        为什么不能像上游那样 「limit=1」 直接取第一条：Bangumi 的相关性排序不认季度
+        后缀，搜「超超超超超喜欢你的100个女朋友 第三季」返回的头一条是 2023 年的第一季。
+        「/追番」、Webhook 自动建条目、进度回填全走这里，取错季的连锁反应很难看 ——
+        第三季的更新会写进第一季的记录，进度还会被第一季的 12 话封顶成「假完结」。
         """
         query = query.strip()
         if not query:
@@ -173,8 +218,10 @@ class SearchService:
         sid = numeric(query)
         if sid:
             return await self._deps.hub.bangumi.subject(sid)
-        found = await self._deps.hub.bangumi.search(query, limit=1, subject_type=subject_type)
-        return found[0] if found else None
+        found = await self._deps.hub.bangumi.search(
+            query, limit=RESOLVE_CANDIDATES, subject_type=subject_type
+        )
+        return pick_by_season(query, found)
 
     # ------------------------------------------------------------------
     # /bgm 与同族指令

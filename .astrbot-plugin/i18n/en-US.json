@@ -145,6 +145,10 @@
       "description": "Maximum narration length",
       "hint": "Longer output is truncated so the persona cannot push the card out of view."
     },
+    "persona_fallback_line": {
+      "description": "Use a canned line when narration fails",
+      "hint": "The persona call is retried once; if both attempts fail (rate limits, gateway hiccups) a fixed sentence fills the narration slot so the card layout stays consistent. Turn this off to leave the slot empty instead."
+    },
     "rss_enabled": {
       "description": "Enable RSS polling"
     },

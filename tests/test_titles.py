@@ -40,8 +40,25 @@ class TestNormalize:
 class TestBaseTitle:
     """去季数后的主标题，用于「第 N 季」与本体互相召回。"""
 
-    def test_strips_season_suffix(self) -> None:
-        assert titles.base_title("孤独摇滚！第2季") == "孤独摇滚2"
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("孤独摇滚！第2季", "孤独摇滚"),
+            ("葬送的芙莉莲 第2期", "葬送的芙莉莲"),
+            ("Blue Lock Season 2", "bluelock"),
+            ("药屋少女的呢喃", "药屋少女的呢喃"),
+        ],
+    )
+    def test_strips_season_suffix(self, raw: str, expected: str) -> None:
+        """季数必须连数字一起消失。
+
+        这里曾经期望 「孤独摇滚2」 —— 那是在给一个 bug 背书：归一化会把季度标记的
+        「#」 当标点抹掉，于是 「#2」 退化成裸的 「2」，「base_title」 的正则一个都
+        匹配不上，季数原封不动留在「主干」里。主干带着季数，「第 N 季与本体互相召回」
+        这个用途从第一天起就是失效的。
+        """
+
+        assert titles.base_title(raw) == expected
 
 
 class TestAliasKeys:

@@ -33,9 +33,10 @@ from dataclasses import replace
 from typing import Any
 
 from ..models import Notification
-from ..titles import MATCH_THRESHOLD, similarity
+from ..titles import MATCH_THRESHOLD, qualify_season, similarity
 from .base import Deps
 from .notifier import Notifier
+from .search import RESOLVE_CANDIDATES, pick_by_season
 from .watchlist import STATUS_DROPPED, WatchlistService, backfill_progress, ensure_watch
 
 # 事件标识 → 本插件内部 kind。AutoBangumi 各版本字段名不统一，
@@ -138,6 +139,18 @@ PLACEHOLDER_COVERS = ("docs.wushuo.top/null.png", "/null.png")
 # 「S01E05」/「s1e5.5」 这类进度串。ani-rss 的 「${text}」 天然带它，
 # 于是就算用户没在 body 里单独写 episode 字段，进度回填也不会失效。
 EPISODE_PATTERN = re.compile(r"S(\d{1,2})E(\d{1,3})", re.IGNORECASE)
+
+#: 链接里的 Bangumi 条目 ID。ani-rss 每条通知都带 「${bgmUrl}」，这是全链路唯一
+#: 零歧义的作品标识 —— 靠标题反查季度必然出错（Bangumi 搜索压根不认季度后缀），
+#: 拿到 ID 就不用猜。
+SUBJECT_URL_PATTERN = re.compile(r"(?:bgm|bangumi)\.tv/subject/(\d+)")
+
+#: 疑似本机路径的行。上游 「${message}」 默认文案会把下载目录整段带上，
+#: 原样播进群里等于公开自己的磁盘结构，没人需要知道。
+_LOCAL_PATH = re.compile(r"[A-Za-z]:[\\/]|/(?:root|home|mnt|media|srv|opt|vol\w*|downloads?)/")
+
+#: 「${message}」 回落入卡时逐行清掉的残渣：模板里没填上的空字段、纯 emoji 行。
+_EMPTY_FIELD = re.compile(r"^[\w \u4e00-\u9fff]{1,12}[:：]\s*$")
 
 
 class WebhookAuthError(Exception):
@@ -268,6 +281,11 @@ class WebhookService:
         title = _first(raw, "title", "official_title", "name", "bangumi_name") or "未知番剧"
         season = _as_int(_first(raw, "season", "season_num"))
         episode = _as_int(_first(raw, "episode", "episode_num", "ep"))
+        # 季内集数与总集数是 ani-rss 3.x 才有的字段，能把「字幕组连续编号」和
+        # 「这季的第几集」分开。缺了它就只能拿连续编号当集数，年番第三季会得到
+        # 「第 29 集」这种一看就不对的进度。
+        current = _as_int(_first(raw, "current_episode", "currentEpisodeNumber", "current_ep"))
+        total = _as_int(_first(raw, "total_episodes", "totalEpisodeNumber", "total_ep", "eps"))
         cover = _first(raw, "poster_url", "poster", "image", "cover")
         if cover and any(mark in cover for mark in PLACEHOLDER_COVERS):
             cover = ""
@@ -280,11 +298,21 @@ class WebhookService:
             hint_season, hint_episode = parse_episode_marker(message)
             episode = hint_episode
             season = season or hint_season
+        # 条目 ID 从链接里捡：显式字段 → 「url」 → 连 「${message}」 都翻一遍，
+        # 用户的 body 模板哪种写法都不至于白丢这个信息。
+        subject_id = parse_subject_id(
+            _first(raw, "subject_id", "bgm_id", "bangumi_id", "bgm_url", "bgmUrl"),
+            link,
+            message,
+        )
 
         lines: list[str] = []
-        marker = _episode_marker(season, episode)
-        if marker:
-            lines.append(f"进度：{marker}")
+        inner = current or episode
+        marker = _episode_marker(season, inner)
+        progress = _progress_line(season, episode, current, total)
+        if progress:
+            lines.append(progress)
+        details = 0
         for label, key in (
             ("种子", "torrent_name"),
             ("文件", "file_name"),
@@ -297,22 +325,31 @@ class WebhookService:
             value = _first(raw, key, f"{key}s")
             if value:
                 lines.append(f"{label}：{value}")
+                details += 1
         if error:
             lines.append(f"错误：{error}")
-        if message and message not in lines:
-            lines.append(message)
+            details += 1
+        if message and not details:
+            # 结构化字段一个都没解析出来才回落到上游原文 —— 解析成功时它整段都是
+            # 重复内容（同样的进度、字幕组、评分再说一遍），还会顺带把本机下载路径
+            # 播进群里。详见 「_message_fallback」。
+            lines.extend(_message_fallback(message))
         if not lines:
             lines.append("上游没有给更多细节。")
 
+        # 下载器把季度单独放在 「season」 字段，标题里常常一个字都不提。这里先合成
+        # 带季度的展示标题，卡片标题、封面检索、追番匹配、进度回填四处就都是同一个
+        # 字符串，不会出现「卡片写第一季、进度记到第三季」这种自相矛盾。
+        display_title = qualify_season(title, season)
         if not cover:
-            cover = await self._cover_for(title)
+            cover = await self._cover_for(display_title, subject_id)
 
         subtitle = KIND_PHRASE.get(kind, "番剧通知")
         if marker and kind == "new_episode":
             subtitle = f"{marker} · {subtitle}"
         return Notification(
             kind=kind,
-            title=title,
+            title=display_title,
             lines=tuple(lines),
             subtitle=subtitle,
             link=link,
@@ -321,19 +358,35 @@ class WebhookService:
                 "source": _first(raw, "source", "from") or "webhook",
                 "season": season,
                 "episode": episode,
+                "current_episode": current,
+                "total_episodes": total,
+                "subject_id": subject_id,
             },
         )
 
-    async def _cover_for(self, title: str) -> str:
-        """上游没给海报时去 Bangumi 找一张，失败就算了。"""
+    async def _cover_for(self, title: str, subject_id: int = 0) -> str:
+        """上游没给海报时去 Bangumi 找一张，失败就算了。
+
+        有条目 ID 就直接取那一条 —— 这是唯一不会认错季度的路径。没有 ID 才退回
+        搜索，并且多取几条交给 「pick_by_season」 重排：Bangumi 的 「sort=match」
+        无视季度后缀，第三季的关键词照样把第一季排在首位，只取第一条必然拿错封面。
+        """
         deps = self._deps
         if not title or not deps.conf.enable_cross_match:
             return ""
+        if subject_id:
+            try:
+                subject = await deps.hub.bangumi.subject(subject_id)
+            except Exception:  # noqa: BLE001 - 条目可能已被删除或 API 抖动
+                subject = None
+            if subject and subject.image:
+                return subject.image
         try:
-            found = await deps.hub.bangumi.search(title, limit=1)
+            found = await deps.hub.bangumi.search(title, limit=RESOLVE_CANDIDATES)
         except Exception:  # noqa: BLE001
             return ""
-        return found[0].image if found else ""
+        picked = pick_by_season(title, found)
+        return picked.image if picked else ""
 
     # ------------------------------------------------------------------
     # 路由
@@ -419,16 +472,22 @@ class WebhookService:
                 targets=self._notifier.resolve_targets(self.fixed_targets()),
                 cover=notification.cover,
                 channel="webhook",
+                total=_as_int(notification.payload.get("total_episodes")),
+                subject_id=_as_int(notification.payload.get("subject_id")),
             )
             self._created += len(created)
         if conf.webhook_auto_progress:
+            # 季内集数优先于字幕组的连续编号：年番第三季的 「S03E29」 里，29 是
+            # 从第一季数起的总编号，写进「全 12 话」的条目会直接假完结。
+            payload = notification.payload
             await backfill_progress(
                 deps,
                 self._watchlist,
                 title=notification.title,
-                episode=_as_int(notification.payload.get("episode")),
+                episode=_as_int(payload.get("current_episode")) or _as_int(payload.get("episode")),
                 targets=targets,
                 channel="webhook",
+                total=_as_int(payload.get("total_episodes")),
             )
         return created
 
@@ -527,6 +586,65 @@ def _episode_marker(season: int, episode: int) -> str:
     return "".join(parts)
 
 
+def _progress_line(season: int, episode: int, current: int, total: int) -> str:
+    """拼出卡片正文里那行「进度：……」。
+
+    ani-rss 的 「${episode}」 是**字幕组的连续编号**：年番拍到第三季，它给的是 29；
+    「${currentEpisodeNumber}」 才是季内集数 9。两者不一致时两个都要写出来 ——
+    只写 29 会让人以为这季有 29 集，只写 9 又对不上文件名，回头找片子没法核对。
+    """
+    inner = current or episode
+    text = _episode_marker(season, inner)
+    if not text:
+        return ""
+    if total:
+        text += f" · 共 {total} 集"
+    if current and episode and current != episode:
+        source = f"S{season:02d}E{episode:02d}" if season else f"E{episode:02d}"
+        text += f"（源编号 {source}）"
+    return f"进度：{text}"
+
+
+def parse_subject_id(*texts: str) -> int:
+    """从链接或正文里抠出 Bangumi 条目 ID，抠不到返回 0。
+
+    纯数字的显式字段（「subject_id": 598058」）也认，所以第一段先试直接转整数。
+    """
+    for text in texts:
+        value = (text or "").strip()
+        if not value:
+            continue
+        if value.isdigit():
+            return _as_int(value)
+        match = SUBJECT_URL_PATTERN.search(value)
+        if match:
+            return _as_int(match.group(1))
+    return 0
+
+
+def _message_fallback(message: str) -> list[str]:
+    """把上游 「${message}」 拆成能入卡的几行。
+
+    ani-rss 的 「${message}」 是它自带的整段通知文案：标题、进度、评分、下载路径一应
+    俱全，还夹着模板里没填上的空字段残渣（「TMDB: 」）和一串庆祝 emoji。只有在我们
+    一个结构化字段都没解析出来时才会走到这里，即便如此也得先洗一遍：
+
+    * 本机路径行直接丢 —— 群里没人需要知道你的 D 盘目录结构；
+    * 「字段名：」 后面空着的行丢掉 —— 那是用户模板里没填的占位符；
+    * 纯符号/emoji 行丢掉。
+    """
+    kept: list[str] = []
+    for raw_line in message.splitlines():
+        line = raw_line.strip()
+        if not line or _LOCAL_PATH.search(line) or _EMPTY_FIELD.match(line):
+            continue
+        if not any(char.isalnum() or "\u4e00" <= char <= "\u9fff" for char in line):
+            continue
+        if line not in kept:
+            kept.append(line)
+    return kept[:8]
+
+
 def _first(raw: Mapping[str, Any], *keys: str) -> str:
     for key in keys:
         value = raw.get(key)
@@ -584,4 +702,5 @@ __all__ = [
     "classify",
     "fold_event",
     "parse_episode_marker",
+    "parse_subject_id",
 ]

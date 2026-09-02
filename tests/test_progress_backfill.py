@@ -4,7 +4,8 @@
 只会让用户在某天发现进度被打回去、或者某天播报整条消失。所以把边界写死在这里：
 
 * 回填只往前推、被总集数封顶、一部番只动最像的那一条、只影响收到通知的会话；
-* 「只播我追的番」 关着就是全量、开着只留追番表里的、追番表空了就整条不发。
+* 「只播我追的番」 关着就是全量、开着只留追番表里的、追番表空了就整条不发；
+* 自动补追番只在指定名单里建、模糊命中不重复建、弃坑的不复活、搜不到也要建。
 """
 
 from __future__ import annotations
@@ -21,7 +22,13 @@ from nexus.models import CalendarDay, FeedItem, Notification, Subject, WatchItem
 from nexus.services.scheduler import Scheduler
 from nexus.services.search import SearchService
 from nexus.services.subscriptions import _peak_episode
-from nexus.services.watchlist import WatchlistService, backfill_progress
+from nexus.services.watchlist import (
+    MATCH_THRESHOLD,
+    WatchlistService,
+    _auto_item,
+    backfill_progress,
+    ensure_watch,
+)
 from nexus.store import Store
 
 UMO_A = "aiocqhttp:GroupMessage:100"
@@ -100,6 +107,42 @@ async def _watch(
             total=total,
         )
     )
+
+
+class _BangumiSearch(_Bangumi):
+    """会搜出条目的 Bangumi —— 自动建条目要靠它借封面、总集数、评分。"""
+
+    def __init__(self, subject: Subject | None) -> None:
+        super().__init__([])
+        self._subject = subject
+
+    async def search(
+        self, keyword: str, *, limit: int = 1, subject_type: int | None = None
+    ) -> list[Subject]:
+        return [self._subject] if self._subject else []
+
+
+def _deps_search(store: Store, subject: Subject | None) -> Any:
+    """带 Bangumi 搜索能力的假 deps；「_deps」 那份故意没有 「search」，等效于搜索炸掉。"""
+
+    hub = SimpleNamespace(bangumi=_BangumiSearch(subject), bangumi_data=_BangumiData())
+    return SimpleNamespace(
+        conf=NexusConfig(), store=store, hub=hub, http=_Http(), activity=_Activity()
+    )
+
+
+def _subject(**kwargs: Any) -> Subject:
+    base: dict[str, Any] = {
+        "id": 302286,
+        "name": "薬屋のひとりごと",
+        "name_cn": "药屋少女的呢喃",
+        "image": "https://example.invalid/cover.jpg",
+        "total_episodes": 24,
+        "score": 8.4,
+        "air_weekday": 6,
+    }
+    base.update(kwargs)
+    return Subject(**base)
 
 
 @pytest.fixture
@@ -398,3 +441,141 @@ class Test认领关系不会插出重复行:
         saved = await store.upsert_watch(row)
         assert saved.id > 0
         assert len(await store.list_watch(UMO_A)) == 1
+
+
+class Test首推自动加入追番表:
+    """下载器第一次推某部番过来时，追番表该自己长出这一条。
+
+    这条链最容易「静默地半坏」：通知照发、进度永远停在 0，用户只会觉得回填是坏的。
+    所以把「什么时候建、什么时候绝对不建」全部钉在这里。
+    """
+
+    async def test_表里没有就补一条(self, store: Store) -> None:
+        deps = _deps_search(store, _subject())
+        created = await ensure_watch(
+            deps, _watchlist(deps), title="药屋少女的呢喃", targets=(UMO_A,)
+        )
+        assert created == (UMO_A,)
+        rows = await store.list_watch(UMO_A)
+        assert [(item.title, item.status, item.progress) for item in rows] == [
+            ("药屋少女的呢喃", "watching", 0)
+        ]
+
+    async def test_搜到条目时借用元数据(self, store: Store) -> None:
+        """封面、总集数是卡片和进度条的原料，能借就借。"""
+
+        deps = _deps_search(store, _subject())
+        await ensure_watch(deps, _watchlist(deps), title="药屋少女的呢喃", targets=(UMO_A,))
+        row = (await store.list_watch(UMO_A))[0]
+        assert (row.subject_id, row.total, row.cover) == (
+            302286,
+            24,
+            "https://example.invalid/cover.jpg",
+        )
+
+    async def test_搜不到也要建(self, store: Store) -> None:
+        """冷门番、网络抖动都可能搜不到；静默什么都不做正是这个功能要消灭的体验。"""
+
+        deps = _deps_search(store, None)
+        created = await ensure_watch(deps, _watchlist(deps), title="测试番剧甲", targets=(UMO_A,))
+        assert created == (UMO_A,)
+        row = (await store.list_watch(UMO_A))[0]
+        assert (row.title, row.subject_id, row.total) == ("测试番剧甲", 0, 0)
+
+    async def test_相似标题不重复添加(self, store: Store) -> None:
+        """表里已有本篇时，「第二季」 这类写法不该再插一条 —— 一部番出现两次最难发现。"""
+
+        await _watch(store, UMO_A, "药屋少女的呢喃", progress=7)
+        deps = _deps_search(store, _subject())
+        created = await ensure_watch(
+            deps, _watchlist(deps), title="药屋少女的呢喃 第二季", targets=(UMO_A,)
+        )
+        assert created == ()
+        assert len(await store.list_watch(UMO_A)) == 1
+
+    async def test_弃坑的不复活也不重建(self, store: Store) -> None:
+        """用户主动弃掉的番，不该被下载器一条通知拉回来，也不该旁边多一条新的。"""
+
+        await _watch(store, UMO_A, "药屋少女的呢喃", status="dropped")
+        deps = _deps_search(store, _subject())
+        created = await ensure_watch(
+            deps, _watchlist(deps), title="药屋少女的呢喃", targets=(UMO_A,)
+        )
+        assert created == ()
+        rows = await store.list_watch(UMO_A)
+        assert [(item.title, item.status) for item in rows] == [("药屋少女的呢喃", "dropped")]
+
+    async def test_只在传入名单里建(self, store: Store) -> None:
+        """往没点名的会话里塞数据是越权，哪怕它也订阅了同一部番。"""
+
+        deps = _deps_search(store, _subject())
+        await ensure_watch(deps, _watchlist(deps), title="药屋少女的呢喃", targets=(UMO_A,))
+        assert await store.list_watch(UMO_B) == []
+
+    async def test_名单里重复会话只建一条(self, store: Store) -> None:
+        """配置里手抖写重、或空串混进来，都不该变成两条记录。"""
+
+        deps = _deps_search(store, _subject())
+        created = await ensure_watch(
+            deps, _watchlist(deps), title="药屋少女的呢喃", targets=(UMO_A, UMO_A, "")
+        )
+        assert created == (UMO_A,)
+        assert len(await store.list_watch(UMO_A)) == 1
+
+    async def test_空标题什么都不做(self, store: Store) -> None:
+        deps = _deps_search(store, _subject())
+        assert await ensure_watch(deps, _watchlist(deps), title="", targets=(UMO_A,)) == ()
+        assert await store.list_watch(UMO_A) == []
+
+    async def test_补条目后同一轮就能回填进度(self, store: Store) -> None:
+        """先建再回填的顺序是有意的：新建那条在同一次请求里就该拿到进度。"""
+
+        deps = _deps_search(store, _subject())
+        watchlist = _watchlist(deps)
+        await ensure_watch(deps, watchlist, title="药屋少女的呢喃", targets=(UMO_A,))
+        changed = await backfill_progress(
+            deps, watchlist, title="药屋少女的呢喃", episode=3, targets=(UMO_A,)
+        )
+        assert changed == 1
+        assert (await store.list_watch(UMO_A))[0].progress == 3
+
+    async def test_建条目会留下运行记录(self, store: Store) -> None:
+        """悄悄改用户数据必须留痕，出问题时能在运行记录里对账。"""
+
+        deps = _deps_search(store, _subject())
+        await ensure_watch(deps, _watchlist(deps), title="药屋少女的呢喃", targets=(UMO_A,))
+        assert any("自动加入追番表" in note for note in deps.activity.notes)
+
+
+class Test自动条目怎么挑标题:
+    """条目标题必须和推送用的名字足够像，否则下一次推送既匹配不到、又会再插一条。"""
+
+    def test_规范名足够像时采用规范名(self) -> None:
+        item = _auto_item(UMO_A, "药屋少女的呢喃", _subject())
+        assert (item.title, item.subject_id, item.total) == ("药屋少女的呢喃", 302286, 24)
+        assert item.status == "watching"
+
+    def test_只有原名对得上时保留推送名(self) -> None:
+        """推送给日文原名、Bangumi 返回中文译名：借元数据，但标题跟着推送走。"""
+
+        subject = _subject(name="キミとアイドルプリキュア", name_cn="名侦探光之美少女")
+        item = _auto_item(UMO_A, "キミとアイドルプリキュア", subject)
+        assert item.title == "キミとアイドルプリキュア"
+        assert item.subject_id == 302286
+
+    def test_完全不像时退回只有名字的条目(self) -> None:
+        """搜歪了比搜不到更糟 —— 挂错封面和集数会一直错下去。"""
+
+        subject = _subject(name="完全不同的作品", name_cn="")
+        item = _auto_item(UMO_A, "测试番剧甲", subject, cover="https://example.invalid/x.jpg")
+        assert (item.title, item.subject_id, item.total) == ("测试番剧甲", 0, 0)
+        assert item.cover == "https://example.invalid/x.jpg"
+
+    def test_搜不到时退回推送给的元数据(self) -> None:
+        item = _auto_item(UMO_A, "测试番剧甲", None, total=12)
+        assert (item.title, item.subject_id, item.total) == ("测试番剧甲", 0, 12)
+
+    def test_门槛用的是共享常量(self) -> None:
+        """四处判定必须同一个数，各写一个字面量就会出现「匹配得上却不认」。"""
+
+        assert pytest.approx(0.72) == MATCH_THRESHOLD

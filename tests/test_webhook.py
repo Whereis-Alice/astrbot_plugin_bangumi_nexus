@@ -7,6 +7,10 @@
 
 后半段测的是独立监听端口本身：裸 HTTP 解析、超时分工（读用 「READ_TIMEOUT」、
 办事用 「ACK_TIMEOUT」）、以及「慢事件先回 202、后台照样发完」这条线上踩过的坑。
+
+最后一段测的是追番表联动的接线：补条目只认固定名单、两个开关互不牵连、
+非进度事件绝不动表。相似度判定本身在 「tests/test_progress_backfill.py」 里
+用真 「Store」 测过，这里不重复。
 """
 
 from __future__ import annotations
@@ -805,24 +809,42 @@ class _Notifier:
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, tuple[str, ...]]] = []
+        self._seen: list[Any] | None = None
+
+    def watch(self, sink: list[Any]) -> None:
+        """把发出去的 「Notification」 原件也收一份 —— 要断言卡片正文时用。"""
+
+        self._seen = sink
 
     def resolve_targets(self, targets: Any) -> tuple[str, ...]:
         return tuple(str(item).strip() for item in targets if str(item).strip())
 
     async def dispatch(self, notification: Any, targets: Any) -> int:
         picked = tuple(targets)
+        if self._seen is not None:
+            self._seen.append(notification)
         self.sent.append((notification.kind, picked))
         return len(picked)
 
 
 class _Store:
-    """只提供 「list_watch」 —— 路由层唯一用到的存储接口。"""
+    """路由层只要 「list_watch」；自动补追番还要写库，所以把两个写方法也记下来。"""
 
     def __init__(self, rows: tuple[tuple[str, str, str], ...] = ()) -> None:
         self._rows = rows
+        self.created: list[tuple[str, str]] = []
+        self.updated: list[tuple[int, int]] = []
 
     async def list_watch(self, umo: str = "") -> list[Any]:
         return [SimpleNamespace(umo=row[0], title=row[1], status=row[2]) for row in self._rows]
+
+    async def upsert_watch(self, item: Any) -> Any:
+        self.created.append((item.umo, item.title))
+        item.id = len(self.created)
+        return item
+
+    async def update_watch(self, row_id: int, **fields: Any) -> None:
+        self.updated.append((row_id, int(fields.get("progress", 0))))
 
 
 GROUP_UMO = "default:GroupMessage:1091576468"
@@ -929,3 +951,171 @@ class TestFixedTargets:
         result = await service.selftest()
         assert result == {"ok": True, "delivered": 1, "targets": 1}
         assert notifier.sent == [("test", (GROUP_UMO,))]
+
+
+class _Watchlist:
+    """「WatchlistService」 替身，只实现自动补追番用到的两件事。
+
+    「matching_titles」 按会话给答案而不是真算相似度 —— 相似度已经在
+    「tests/test_progress_backfill.py」 里用真 「Store」 测过，这里要验的是接线：
+    哪些会话会被查、哪些会话会被建。
+    """
+
+    def __init__(self, *, has: tuple[str, ...] = ()) -> None:
+        self._has = has
+        self.asked: list[str] = []
+
+    async def matching_titles(self, umo: str, title: str, *, threshold: float = 0.0) -> list[Any]:
+        self.asked.append(umo)
+        if umo not in self._has:
+            return []
+        row = SimpleNamespace(id=9, umo=umo, title=title, status="watching", progress=0, total=0)
+        return [row]
+
+    async def resolve_subject(self, title: str) -> Any:
+        """线上会去 Bangumi 借元数据；这里一律搜不到，走「宁可少几个字段」那条路。"""
+
+        return None
+
+
+def _wired(
+    conf: NexusConfig,
+    *,
+    rows: tuple[tuple[str, str, str], ...] = (),
+    has: tuple[str, ...] = (),
+) -> tuple[webhook.WebhookService, _Notifier, _Store, _Watchlist]:
+    """接上追番表的服务实例，用来验证「表会不会被动、被动的是谁」。"""
+
+    notifier = _Notifier()
+    store = _Store(rows)
+    watchlist = _Watchlist(has=has)
+    deps = cast(
+        Any,
+        SimpleNamespace(
+            conf=conf,
+            activity=_Activity(),
+            hub=SimpleNamespace(bangumi=_Bangumi()),
+            store=store,
+        ),
+    )
+    service = webhook.WebhookService(
+        deps, notifier=cast(Any, notifier), watchlist=cast(Any, watchlist)
+    )
+    return service, notifier, store, watchlist
+
+
+def _download(**extra: Any) -> dict[str, Any]:
+    """一条典型的 ani-rss 「下载完成」 请求体。"""
+
+    body: dict[str, Any] = {"event": "下载完成", "title": "药屋少女的呢喃", "episode": "3"}
+    body.update(extra)
+    return body
+
+
+class Test首推补追番接线:
+    """下载器第一次推某部番过来时，追番表该长出这一条 —— 但只在该长的地方长。"""
+
+    @staticmethod
+    def _conf(**extra: Any) -> NexusConfig:
+        base: dict[str, Any] = {
+            "webhook_enabled": True,
+            "webhook_targets": (GROUP_UMO,),
+            "enable_cross_match": False,
+        }
+        base.update(extra)
+        return NexusConfig(**base)
+
+    async def test_表里没有就建并且卡片照发(self) -> None:
+        service, notifier, store, _ = _wired(self._conf())
+        result = await service.handle(_download())
+        assert result["created"] == 1
+        assert store.created == [(GROUP_UMO, "药屋少女的呢喃")]
+        assert notifier.sent[0][1] == (GROUP_UMO,)
+
+    async def test_卡片末行交代这件事(self) -> None:
+        """悄悄改用户的清单是不礼貌的，卡片必须说一声。"""
+
+        service, notifier, _, _ = _wired(self._conf())
+        seen: list[Any] = []
+        notifier.watch(seen)
+        await service.handle(_download())
+        assert seen[0].lines[-1] == webhook.AUTO_WATCH_LINE
+
+    async def test_关掉开关就不动清单(self) -> None:
+        service, notifier, store, _ = _wired(self._conf(webhook_auto_watch=False))
+        seen: list[Any] = []
+        notifier.watch(seen)
+        result = await service.handle(_download())
+        assert result["created"] == 0
+        assert store.created == []
+        assert webhook.AUTO_WATCH_LINE not in seen[0].lines
+
+    async def test_两个开关互不牵连(self) -> None:
+        """想「只把清单建好、进度我自己点」的人也存在，补条目不能挂在回填开关底下。"""
+
+        service, _, store, _ = _wired(self._conf(webhook_auto_progress=False))
+        result = await service.handle(_download())
+        assert result["created"] == 1
+        assert store.updated == []
+
+    async def test_只回填不建清单也要成立(self) -> None:
+        service, _, store, _ = _wired(self._conf(webhook_auto_watch=False), has=(GROUP_UMO,))
+        await service.handle(_download())
+        assert store.created == []
+        assert store.updated == [(9, 3)]
+
+    async def test_表里已有就不重复建(self) -> None:
+        service, _, store, _ = _wired(self._conf(), has=(GROUP_UMO,))
+        result = await service.handle(_download())
+        assert result["created"] == 0
+        assert store.created == []
+
+    async def test_只给固定名单建条目(self) -> None:
+        """追番联动派生出来的会话本来就有条目，往它们那儿再建毫无意义。"""
+
+        service, notifier, store, watchlist = _wired(
+            self._conf(webhook_notify_watchers=True),
+            rows=((OTHER_UMO, "药屋少女的呢喃", "watching"),),
+        )
+        await service.handle(_download())
+        assert notifier.sent[0][1] == (GROUP_UMO, OTHER_UMO)
+        assert store.created == [(GROUP_UMO, "药屋少女的呢喃")]
+        assert watchlist.asked == [GROUP_UMO, GROUP_UMO, OTHER_UMO]
+
+    async def test_非进度事件绝不动清单(self) -> None:
+        """「开始下载」/「新集更新」 只是通知，谈不上「我要追」。"""
+
+        service, _, store, _ = _wired(self._conf())
+        result = await service.handle(_download(event="new_episode"))
+        assert result["created"] == 0
+        assert store.created == []
+
+    async def test_静默事件照样建照样回填(self) -> None:
+        """静默的意思是「只记账、不刷屏」，记账本身不能跟着一起静默。"""
+
+        service, notifier, store, _ = _wired(self._conf(webhook_silent_kinds=("下载完成",)))
+        result = await service.handle(_download())
+        assert (result["silent"], result["created"], result["delivered"]) == (True, 1, 0)
+        assert store.created == [(GROUP_UMO, "药屋少女的呢喃")]
+        assert notifier.sent == []
+
+    async def test_没有收件人时什么都不做(self) -> None:
+        """一个目标都解析不出来，说明配置还没填完，别在这时候擅自改数据。"""
+
+        service, _, store, _ = _wired(NexusConfig(webhook_enabled=True, enable_cross_match=False))
+        result = await service.handle(_download())
+        assert result["targets"] == 0
+        assert store.created == []
+
+    def test_两条链的回填默认一致(self) -> None:
+        """两个默认值打架的话，默认装一遍就会得到「条目建了、进度不动」这种半坏状态。"""
+
+        conf = NexusConfig()
+        assert (conf.webhook_auto_progress, conf.rss_auto_progress) == (True, True)
+
+    async def test_stats_报告开关与累计条数(self) -> None:
+        service, _, _, _ = _wired(self._conf())
+        await service.handle(_download())
+        stats = service.stats()
+        assert stats["auto_watch"] is True
+        assert stats["created"] == 1

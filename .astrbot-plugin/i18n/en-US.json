@@ -213,7 +213,11 @@
     },
     "webhook_auto_progress": {
       "description": "Advance watch progress on new episodes",
-      "hint": "When a download-complete or import event arrives, move the matching watchlist entry to that episode. It only moves forward, never back."
+      "hint": "When a download-complete or import event arrives, move the matching watchlist entry to that episode. It only moves forward, never back. On by default, matching the RSS side (rss_auto_progress)."
+    },
+    "webhook_auto_watch": {
+      "description": "Add to watchlist on first push",
+      "hint": "When a show is pushed for the first time and the webhook notify targets do not track it yet, add an entry and backfill its progress in the same request. Titles already present are never duplicated, dropped ones are never revived, and a name-only entry is created when Bangumi has no match. Turn it off and you must run /追番 once before progress starts moving."
     },
     "webhook_port": {
       "description": "Standalone webhook port",

@@ -20,6 +20,12 @@ from typing import Any, TypeVar
 
 T = TypeVar("T")
 
+#: 「算同一部番」的相似度门槛。回填追番进度、判断表里是不是已经有这部、决定
+#: 自动建条目要不要采用 Bangumi 规范名、「只播我追的番」筛选，全部用这一个数 ——
+#: 各处各写一个字面量的话，某天调了一处就会出现「匹配得上却不认、于是又插一条」
+#: 的重复记录。「similarity」 给子串关系的保底分也钉在这里，保证包含关系一定过线。
+MATCH_THRESHOLD = 0.72
+
 #: 归一化时直接抹掉的字符：标点、空白、装饰符号。
 _PUNCTUATION = re.compile(
     r"[\s\u3000!-/:-@\[-`{-~！-｀。、，．・：；？「」『』（）【】〈〉《》～—－ー〜♪★☆♥♡]+"
@@ -121,9 +127,9 @@ def similarity(left: str, right: str) -> float:
         return 1.0
     if a in b or b in a:
         # 「进击的巨人」vs「进击的巨人 最终季」这类包含关系，按长度比例给分，
-        # 但保底 0.72，确保它一定压过纯字符重合的巧合。
+        # 但保底 「MATCH_THRESHOLD」，确保它一定压过纯字符重合的巧合。
         ratio = min(len(a), len(b)) / max(len(a), len(b))
-        return max(0.72, min(0.95, ratio + 0.2))
+        return max(MATCH_THRESHOLD, min(0.95, ratio + 0.2))
     return SequenceMatcher(None, a, b).ratio()
 
 

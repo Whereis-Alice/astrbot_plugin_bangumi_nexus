@@ -25,7 +25,7 @@ from ..render import (
     flatten,
 )
 from ..sources.bangumi import TYPE_ANIME, TYPE_BOOK, is_movie, staff_from_infobox
-from ..titles import parse_broadcast, season_code, season_label, similarity
+from ..titles import MATCH_THRESHOLD, parse_broadcast, season_code, season_label, similarity
 from .base import (
     Deps,
     Reply,
@@ -125,9 +125,6 @@ async def _long_running(
     return tuple(result)
 
 
-WATCHLIST_MATCH_THRESHOLD = 0.72
-
-
 async def _watched_titles(deps: Deps, umo: str) -> tuple[str, ...]:
     """这个会话追番表里还在追的标题，用于「播报只播我追的番」。
 
@@ -150,7 +147,7 @@ def _in_watchlist(subject: Subject, titles: Sequence[str]) -> bool:
     names = [name for name in (subject.name_cn, subject.name) if name]
     for name in names:
         for wanted in titles:
-            if similarity(name, wanted) >= WATCHLIST_MATCH_THRESHOLD:
+            if similarity(name, wanted) >= MATCH_THRESHOLD:
                 return True
     return False
 

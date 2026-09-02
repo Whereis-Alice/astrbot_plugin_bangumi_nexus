@@ -14,7 +14,10 @@
    和 emoji（「🎉」），这里一并认下来，用户直接写 「"event": "${action}"」 就行；
 5. **静默记账**：ani-rss 允许一次订阅同时推「开始下载」和「下载完成」，
    全发卡片会一集刷两条 —— 「webhook_silent_kinds」 里列出的事件只回填进度、
-   不发卡片。
+   不发卡片；
+6. **自动补追番**：某部番第一次推过来、而固定通知目标的追番表里还没有它时，
+   顺手建一条（「webhook_auto_watch」）—— 在下载器那边订阅了就是「我要追」，
+   不该逼用户回聊天窗口再 「/追番」 一次进度才开始动。
 
 Copyright (C) 2026 Whereis-Alice and AstrBot Plugin Authors.
 Licensed under the GNU Affero General Public License v3.0 or later.
@@ -26,13 +29,14 @@ import json
 import re
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from ..models import Notification
-from ..titles import similarity
+from ..titles import MATCH_THRESHOLD, similarity
 from .base import Deps
 from .notifier import Notifier
-from .watchlist import STATUS_DROPPED, WatchlistService, backfill_progress
+from .watchlist import STATUS_DROPPED, WatchlistService, backfill_progress, ensure_watch
 
 # 事件标识 → 本插件内部 kind。AutoBangumi 各版本字段名不统一，
 # 这里把见过的写法全列出来，识别不出再走字段推断。
@@ -102,6 +106,10 @@ KIND_PHRASE = {
 # 这些事件意味着「这一集已经能看了」，可以顺手推进追番进度。
 PROGRESS_KINDS = frozenset({"rename_complete", "download_complete"})
 
+#: 自动建了追番条目时追加到卡片正文的一行。
+#: 悄悄改用户数据是大忌，卡片里必须能看出「表里为什么多了一条」。
+AUTO_WATCH_LINE = "已自动加入追番表"
+
 # 归一化事件串时要抹掉的装饰字符。有人喜欢在模板里写 「[下载完成]」。
 _EVENT_TRIM = "[]【】()（）「」<>《》:：·|/\\'\"“”"
 
@@ -153,6 +161,7 @@ class WebhookService:
         self._rejected = 0
         self._delivered = 0
         self._silenced = 0
+        self._created = 0
         self._last_at = 0.0
         self._last_kind = ""
 
@@ -195,8 +204,11 @@ class WebhookService:
         # 通知链路要拉封面、调人格 LLM、渲染卡片，任何一步炸了都不该让
         # 「这集已经入库」这条既成事实丢掉；回填只碰数据库，几乎不会失败。
         # 也正因如此，静默事件同样要回填 —— 静默的意义就是「只记账，不刷屏」。
+        created: tuple[str, ...] = ()
         if notification.kind in PROGRESS_KINDS:
-            await self._auto_progress(notification, targets)
+            created = await self._sync_watchlist(notification, targets)
+        if created:
+            notification = replace(notification, lines=(*notification.lines, AUTO_WATCH_LINE))
 
         sent = 0
         if silent:
@@ -213,6 +225,7 @@ class WebhookService:
             "delivered": sent,
             "targets": len(targets),
             "silent": silent,
+            "created": len(created),
         }
 
     def silent_kinds(self) -> frozenset[str]:
@@ -366,29 +379,58 @@ class WebhookService:
         return [
             item.umo
             for item in items
-            if item.status != STATUS_DROPPED and similarity(item.title, title) >= 0.72
+            if item.status != STATUS_DROPPED and similarity(item.title, title) >= MATCH_THRESHOLD
         ]
 
     # ------------------------------------------------------------------
-    # 进度回填
+    # 追番表联动
     # ------------------------------------------------------------------
-    async def _auto_progress(self, notification: Notification, targets: tuple[str, ...]) -> None:
-        """新集入库时把追番进度推到对应集数。
+    async def _sync_watchlist(
+        self, notification: Notification, targets: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """新集入库时维护追番表，返回自动新建了条目的会话。
 
-        只在「下载完成 / 整理入库」时动，且只往前推不往后退 —— 补种老集数
-        不该把用户已经看到的进度打回去。
+        两步、两个开关，互不牵连：
+
+        1. 「webhook_auto_watch」：固定通知目标的追番表里还没有这部番就补一条；
+        2. 「webhook_auto_progress」：把追番进度推到这一集，只往前不往后 ——
+           补种老集数不该把用户已经看到的进度打回去。
+
+        为什么必须是两个独立开关：想「只记进度、别动我的清单」和想「先把清单建好、
+        进度我自己点」的人都存在，把补条目挂在回填开关底下，任何一方都会被误伤。
+
+        为什么补条目只认固定名单、回填却覆盖全部收件人：追番联动派生出来的会话
+        本来就有条目（正因为有才收到通知），需要的只是进度；往这些会话里再建
+        条目毫无意义，往陌生会话里建更是越权。
+
+        顺序也是有意的 —— 先补条目再回填，新建的那条在同一次请求里就能拿到进度，
+        不必等下一集才开始动。
         """
         deps = self._deps
-        if not deps.conf.webhook_auto_progress or self._watchlist is None:
-            return
-        await backfill_progress(
-            deps,
-            self._watchlist,
-            title=notification.title,
-            episode=_as_int(notification.payload.get("episode")),
-            targets=targets,
-            channel="webhook",
-        )
+        conf = deps.conf
+        if self._watchlist is None:
+            return ()
+        created: tuple[str, ...] = ()
+        if conf.webhook_auto_watch:
+            created = await ensure_watch(
+                deps,
+                self._watchlist,
+                title=notification.title,
+                targets=self._notifier.resolve_targets(self.fixed_targets()),
+                cover=notification.cover,
+                channel="webhook",
+            )
+            self._created += len(created)
+        if conf.webhook_auto_progress:
+            await backfill_progress(
+                deps,
+                self._watchlist,
+                title=notification.title,
+                episode=_as_int(notification.payload.get("episode")),
+                targets=targets,
+                channel="webhook",
+            )
+        return created
 
     # ------------------------------------------------------------------
     # 观测
@@ -422,6 +464,8 @@ class WebhookService:
             "port": self._deps.conf.webhook_port,
             "bind": self._deps.conf.webhook_bind,
             "auto_progress": self._deps.conf.webhook_auto_progress,
+            "auto_watch": self._deps.conf.webhook_auto_watch,
+            "created": self._created,
             "notify_watchers": self._deps.conf.webhook_notify_watchers,
             "targets": list(self.fixed_targets()),
             "targets_own": bool(self._deps.conf.webhook_targets),

@@ -3,6 +3,11 @@
 对应上游 「/追番」 「/弃坑」 「/放送时间」 的会话侧数据，外加本插件新增的
 「/追番列表」 「/看到」。追番数据一律落本地 SQLite（「StarTools.get_data_dir()」 下），
 不写 Bangumi 账号 —— 免得逼用户交 token 才能用最基本的功能。
+
+模块末尾两个函数是给后台链路（RSS 轮询、下载器 Webhook、ani-rss 同步）共用的：
+「ensure_watch」 负责「表里还没有就补一条」，「backfill_progress」 负责「有了就把进度
+往前推」。两件事分开写是因为开关也是分开的 —— 有人只想要自动记账，有人连清单都不想
+被动过。
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ from collections.abc import Sequence
 from ..constants import MAX_WATCHLIST_PER_SESSION, WATCH_STATUS_CN
 from ..models import MatchResult, Subject, WatchItem
 from ..render import build_notice_card, build_watchlist_card
-from ..titles import similarity
+from ..titles import MATCH_THRESHOLD, similarity
 from .base import Deps, Reply, cover_map, cover_uri, make_card, numeric, style_for
 from .search import SearchService
 
@@ -255,12 +260,29 @@ class WatchlistService:
         return await self._deps.store.find_watch(umo, query.strip())
 
     async def matching_titles(
-        self, umo: str, title: str, *, threshold: float = 0.72
+        self, umo: str, title: str, *, threshold: float = MATCH_THRESHOLD
     ) -> list[WatchItem]:
-        """按标题相似度找会话里的追番条目 —— RSS 更新回填进度时用。"""
+        """按标题相似度找会话里的追番条目 —— RSS 更新回填进度时用。
+
+        故意不过滤状态：弃坑的条目也要返回。上层拿这个结果判断「表里有没有这部」，
+        漏掉弃坑条目就会把用户主动弃掉的番当成缺失、再自动补一条回来。
+        """
         items = await self._deps.store.list_watch(umo)
         hits = [item for item in items if similarity(item.title, title) >= threshold]
         return sorted(hits, key=lambda item: similarity(item.title, title), reverse=True)
+
+    async def resolve_subject(self, title: str) -> Subject | None:
+        """按名字找 Bangumi 条目 —— 自动建条目时用来补封面、总集数、评分。
+
+        单独包一层而不是让调用方直接摸 「self._search」：自动建条目跑在 Webhook /
+        定时任务这类后台链路上，搜索失败只该让新条目「少几个字段」，不该把整条
+        请求带崩，所以异常在这里就吞掉并留一条运行记录。
+        """
+        try:
+            return await self._search.resolve(title)
+        except Exception as error:  # noqa: BLE001 - 搜不到就退化成最简条目
+            self._deps.activity.warn("watchlist", f"自动建条目查询「{title}」失败：{error}")
+            return None
 
 
 async def backfill_progress(
@@ -312,6 +334,100 @@ async def backfill_progress(
     return changed
 
 
+async def ensure_watch(
+    deps: Deps,
+    watchlist: WatchlistService,
+    *,
+    title: str,
+    targets: Sequence[str],
+    cover: str = "",
+    total: int = 0,
+    channel: str = "watch",
+) -> tuple[str, ...]:
+    """把还没进追番表的番自动补一条，返回真正新建了条目的会话。
+
+    为什么需要它：下载器（ani-rss / AutoBangumi）第一次推某部番过来时，追番表里
+    往往还没有这一条 —— 用户在下载器那边订阅，本身就是在表达「我要追」，却还得回
+    聊天窗口再 「/追番 番名」 一遍进度才会开始动。少做这一步的后果很隐蔽：通知照
+    发、进度永远停在 0，用户只会觉得「回填是坏的」。
+
+    四条不变量：
+
+    * **只在指定名单里建**。传进来的通常是 Webhook 的固定通知目标；追番联动派生
+      出来的会话本来就有条目，往陌生会话里塞数据更是越权。
+    * **模糊命中就算已有**。判定复用回填那套相似度匹配（「MATCH_THRESHOLD」），
+      表里已有 「药屋少女的呢喃」 时不会再插一条 「药屋少女的呢喃 第二季」。
+    * **弃坑的不复活**。「matching_titles」 连弃坑条目一起查，命中即跳过 ——
+      用户主动弃掉的番不该被下载器一条通知拉回来。
+    * **搜不到也要建**。下载器给的都是真实番名，Bangumi 偶尔搜不到（网络抖动、
+      冷门番、只给了日文原名），这时宁可建一条只有名字的条目，也不要静默地什么都
+      不做 —— 「静默什么都不做」正是这个功能要消灭的体验。
+    """
+
+    if not title:
+        return ()
+    subject: Subject | None = None
+    looked_up = False
+    created: list[str] = []
+    for session in dict.fromkeys(target for target in targets if target):
+        try:
+            hits = await watchlist.matching_titles(session, title)
+        except Exception as error:  # noqa: BLE001 - 单个会话读失败不该拖垮整轮
+            deps.activity.warn(channel, f"匹配追番表失败：{error}")
+            continue
+        if hits:
+            continue
+        if not looked_up:
+            # 一条事件推给多个会话时元数据是同一份，Bangumi 只查一次。
+            looked_up = True
+            subject = await watchlist.resolve_subject(title)
+        item = _auto_item(session, title, subject, cover=cover, total=total)
+        try:
+            stored = await deps.store.upsert_watch(item)
+        except Exception as error:  # noqa: BLE001 - 超上限或写库失败只跳过这个会话
+            deps.activity.warn(channel, f"自动加入追番表失败：{error}")
+            continue
+        created.append(session)
+        deps.activity.info(channel, f"{session} 自动加入追番表：{stored.title}")
+    return tuple(created)
+
+
+def _auto_item(
+    umo: str, title: str, subject: Subject | None, *, cover: str = "", total: int = 0
+) -> WatchItem:
+    """给「自动建条目」挑标题与元数据。
+
+    唯一的硬约束：条目标题必须和推送用的名字足够像。够不上的话，下一次推送既匹配
+    不到这一条（进度永远停在 0），又会再插一条重复记录 —— 一部番在表里出现两次。
+    所以 Bangumi 的规范名只在足够接近时才采用；只是原名对得上（推送给的是日文名、
+    Bangumi 返回中文名）就保留推送原名、只借元数据；连原名都对不上就当没搜到，
+    宁可少几个字段，也不要挂错封面和集数。
+    """
+    fallback = WatchItem(
+        id=0,
+        umo=umo,
+        subject_id=0,
+        title=title,
+        status=STATUS_WATCHING,
+        cover=cover,
+        total=total,
+    )
+    if subject is None:
+        return fallback
+    canonical = similarity(subject.display_name, title) >= MATCH_THRESHOLD
+    if not canonical and similarity(subject.alt_name, title) < MATCH_THRESHOLD:
+        return fallback
+    item = subject_to_item(umo, subject)
+    item.status = STATUS_WATCHING
+    if not canonical:
+        item.title = title
+    if not item.cover:
+        item.cover = cover
+    if not item.total:
+        item.total = total
+    return item
+
+
 def _sort_key(item: WatchItem) -> tuple[int, float, str]:
     """在追的排前面，其次按最近更新时间倒序。"""
     rank = {STATUS_WATCHING: 0, STATUS_PLANNED: 1, STATUS_FINISHED: 2, STATUS_DROPPED: 3}
@@ -344,11 +460,13 @@ def subject_to_item(umo: str, subject: Subject) -> WatchItem:
 
 
 __all__ = [
+    "MATCH_THRESHOLD",
     "STATUS_DROPPED",
     "STATUS_FINISHED",
     "STATUS_PLANNED",
     "STATUS_WATCHING",
     "WatchlistService",
     "backfill_progress",
+    "ensure_watch",
     "subject_to_item",
 ]

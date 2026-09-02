@@ -23,7 +23,7 @@ from typing import Any
 from ..constants import WEEKDAY_CN, YUC_SEASON_URL
 from ..http import FetchError, HttpClient, browser_headers
 from ..models import SeasonEntry
-from ..titles import alias_keys, best_match, season_code
+from ..titles import MATCH_THRESHOLD, alias_keys, best_match, season_code
 
 YUC_SITE = YUC_SEASON_URL.split("/{", 1)[0].rstrip("/")
 
@@ -110,7 +110,7 @@ class SeasonTable:
                 self._index.setdefault(key, entry)
         return self
 
-    def find(self, *titles: str, threshold: float = 0.72) -> SeasonEntry | None:
+    def find(self, *titles: str, threshold: float = MATCH_THRESHOLD) -> SeasonEntry | None:
         for title in titles:
             if not title:
                 continue

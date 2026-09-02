@@ -224,7 +224,9 @@ class NexusConfig:
     webhook_path: str = "bangumi_nexus/notify"
     webhook_token: str = ""
     webhook_notify_watchers: bool = True
-    webhook_auto_progress: bool = False
+    webhook_auto_progress: bool = True
+    #: 下载器第一次推某部番过来时，若固定通知目标的追番表里还没有它就自动补一条。
+    webhook_auto_watch: bool = True
     webhook_port: int = 0
     webhook_bind: str = "0.0.0.0"
     webhook_silent_kinds: tuple[str, ...] = ()
@@ -356,7 +358,8 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
         webhook_path=_as_str(_get(raw, "webhook_path", ""), "bangumi_nexus/notify"),
         webhook_token=_as_str(_get(raw, "webhook_token", "")),
         webhook_notify_watchers=_as_bool(_get(raw, "webhook_notify_watchers", True), True),
-        webhook_auto_progress=_as_bool(_get(raw, "webhook_auto_progress", False), False),
+        webhook_auto_progress=_as_bool(_get(raw, "webhook_auto_progress", True), True),
+        webhook_auto_watch=_as_bool(_get(raw, "webhook_auto_watch", True), True),
         webhook_port=_as_int(_get(raw, "webhook_port", 0), 0, low=0, high=65535),
         webhook_bind=_as_str(_get(raw, "webhook_bind", ""), "0.0.0.0"),
         webhook_silent_kinds=_as_list(_get(raw, "webhook_silent_kinds", ())),

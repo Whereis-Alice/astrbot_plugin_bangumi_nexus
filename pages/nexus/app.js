@@ -902,6 +902,12 @@ RENDERERS.overview = () => {
         ["Webhook 路由", webhook.route || "（未启用）"],
         ["Webhook 开关", webhook.enabled ? "已开启" : "已关闭"],
         ["令牌", webhook.token_set ? "已设置" : "未设置"],
+        [
+          "追番表维护",
+          (webhook.auto_watch ? "首推自动加入" : "只认已有条目") +
+            " · " +
+            (webhook.auto_progress ? "自动回填进度" : "进度手动"),
+        ],
         ["最近一次", webhook.last_at ? relative(webhook.last_at) + "（" + (webhook.last_kind || "未知事件") + "）" : "从未"],
         [
           "独立监听",
@@ -1812,6 +1818,12 @@ RENDERERS.targets = () => {
             ? "已开启 —— 追了这部番的会话也会收到"
             : "已关闭 —— 只发上面这几个会话",
         ],
+        [
+          "首推自动追番",
+          webhook.auto_watch
+            ? "已开启 —— 上面这些会话的追番表里没有的番会自动补一条"
+            : "已关闭 —— 表里没有的番只发卡片，进度不动",
+        ],
       ]) +
       (webhook.notify_watchers
         ? note("联动开着时，任何把这部番加进追番表的会话都会额外收到卡片。只想固定发某一处，就去「配置 · Webhook 接入」把 webhook_notify_watchers 关掉。", "warn")
@@ -2096,6 +2108,7 @@ RENDERERS.anirss = () => {
       badge("令牌 " + (webhook.token_set ? "已设置" : "未设置"), webhook.token_set ? "ok" : "warn") +
       badge("独立端口 " + (webhookPort || "未开"), webhookPort ? "ok" : "warn") +
       badge("进度回填 " + (webhook.auto_progress ? "已开" : "未开"), webhook.auto_progress ? "ok" : "") +
+      badge("自动追番 " + (webhook.auto_watch ? "已开" : "未开"), webhook.auto_watch ? "ok" : "") +
       `</div>` +
       (webhookReady
         ? ""
@@ -2129,6 +2142,7 @@ RENDERERS.anirss = () => {
       badge("收到 " + num(webhook.received || 0)) +
       badge("已投递 " + num(webhook.delivered || 0)) +
       badge("静默 " + num(webhook.silenced || 0)) +
+      badge("自动补番 " + num(webhook.created || 0)) +
       badge("拒绝 " + num(webhook.rejected || 0)) +
       btn("发一条测试", { act: "webhook-test", glyph: "wand", kind: "ghost", sm: true }),
   });

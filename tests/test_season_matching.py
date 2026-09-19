@@ -282,7 +282,7 @@ class Test卡片带上季度:
                 "title": "超超超超超喜欢你的100个女朋友",
                 "season": "3",
                 "episode": "29",
-                "currentEpisodeNumber": "9",
+                "current_episode": "9",
                 "totalEpisodeNumber": "12",
             }
         )
@@ -311,7 +311,7 @@ class Test卡片带上季度:
                 "title": "超超超超超喜欢你的100个女朋友",
                 "season": "3",
                 "episode": "29",
-                "currentEpisodeNumber": "9",
+                "current_episode": "9",
                 "totalEpisodeNumber": "12",
                 "subgroup": "Kirara Fantasia",
                 "message": "第 9 集下好了\nD:\\番剧\\S03E29.mp4",
@@ -329,7 +329,7 @@ class Test卡片带上季度:
             {"event": "下载完成", "title": "某番", "message": "某番 S01E05 下好了"}
         )
         assert note.lines[0] == "进度：第 1 季第 05 集"
-        assert "某番 S01E05 下好了" in note.lines
+        assert "某番 S01E05 下好了" not in note.lines
 
 
 class Test进度文案:

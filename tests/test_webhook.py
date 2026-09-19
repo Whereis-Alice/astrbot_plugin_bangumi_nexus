@@ -23,6 +23,7 @@ from typing import Any, cast
 import pytest
 
 from nexus.config import NexusConfig
+from nexus.episode_numbers import episode_number
 from nexus.models import Episode, Subject
 from nexus.services import webhook
 from nexus.web import listener
@@ -243,10 +244,10 @@ class TestEpisodeNumbers:
     def test_marker_empty(self) -> None:
         assert webhook.parse_episode_marker("") == (0, 0)
 
-    def test_half_episode_truncates(self) -> None:
-        """半集（总集篇）ani-rss 给 「5.5」，截断成 5 总比丢成 0 好。"""
+    def test_half_episode_is_not_an_integer_progress(self) -> None:
+        """特别篇不能截断成正片进度。"""
 
-        assert webhook._as_int("5.5") == 5
+        assert webhook._as_int("5.5") == 0
 
     def test_int_string_with_spaces(self) -> None:
         assert webhook._as_int(" 7 ") == 7
@@ -316,6 +317,69 @@ class TestBuildFromAniRss:
         assert note.subtitle == "本季完结"
 
 
+class Test事件集数与订阅统计:
+    @pytest.mark.parametrize("aggregate", ["7", "10", "24", "${currentEpisodeNumber}"])
+    async def test_补下第8集不受订阅统计影响(self, aggregate: str) -> None:
+        service = _service(NexusConfig(enable_cross_match=False))
+        note = await service.build(
+            {
+                "event": "下载完成",
+                "title": "某番",
+                "episode": "8",
+                "currentEpisodeNumber": aggregate,
+                "totalEpisodeNumber": "12",
+            }
+        )
+        assert note.payload["event_episode"] == 8
+        assert note.lines[0] == "进度：第 08 集 · 共 12 集"
+        assert "订阅统计" not in note.payload["persona_facts"]
+        assert "共 12 集" not in note.payload["persona_facts"]
+
+    async def test_只有订阅统计不凭空报成下载集号(self) -> None:
+        note = await _service(NexusConfig(enable_cross_match=False)).build(
+            {"event": "下载完成", "title": "某番", "currentEpisodeNumber": "10"}
+        )
+        assert note.payload["event_episode"] == 0
+        assert not any("第 10 集" in line for line in note.lines)
+
+    @pytest.mark.parametrize("value", ["NaN", "Infinity", "-1", "1-12", "${episode}"])
+    def test_非法编号不进入卡片或数据库(self, value: str) -> None:
+        assert episode_number(value) == 0
+
+    @pytest.mark.parametrize("body", [{"episode": "12.5"}, {"message": "某番 S01E12.5 下载完成"}])
+    async def test_特别篇保留小数(self, body: dict[str, str]) -> None:
+        note = await _service(NexusConfig(enable_cross_match=False)).build(
+            {"title": "某番", "event": "下载完成", "totalEpisodeNumber": "12", **body}
+        )
+        assert note.payload["event_episode"] == 12.5
+        assert "第 12.5 集" in note.lines[0]
+
+    @pytest.mark.parametrize("event", ["订阅完结", "缺少集数", "RSS 抓取异常", "摸鱼检测"])
+    async def test_订阅级事件不采用占位符默认的第1集(self, event: str) -> None:
+        note = await _service(NexusConfig(enable_cross_match=False)).build(
+            {
+                "event": event if event != "RSS 抓取异常" else "rss_error",
+                "title": "某番",
+                "episode": "1",
+                "currentEpisodeNumber": "12",
+            }
+        )
+        assert note.payload["event_episode"] == 0
+
+    def test_多集正文不能挑第一集(self) -> None:
+        assert webhook.parse_episode_marker("缺少 S01E03、S01E05") == (0, 0)
+
+    def test_半集不误命中整集(self) -> None:
+        assert webhook.inner_episode([Episode(id=1, sort=27.5, ep=3.5)], 27) == 0
+        assert webhook.inner_episode([Episode(id=1, sort=27.5, ep=3.5)], 27.5) == 3.5
+
+    def test_重复映射不能猜(self) -> None:
+        assert (
+            webhook.inner_episode([Episode(id=1, sort=27, ep=3), Episode(id=2, sort=27, ep=4)], 27)
+            == 0
+        )
+
+
 # 《超超超超超喜欢你的100个女朋友 第三季》（Bangumi 598058）的真实分集表：季内集数
 # 1~12 对应连续编号 25~36 —— 前两季各 12 集，字幕组的文件名接着往下数。
 _S3_NUMBERS: tuple[tuple[int, int], ...] = tuple((ep, ep + 24) for ep in range(1, 13))
@@ -375,17 +439,17 @@ class Test分集表反查:
     def test_空表不炸(self) -> None:
         assert webhook.inner_episode([], 27) == 0
 
-    def test_上游漏了ep字段就用下标兜底(self) -> None:
-        """分集表已按 「sort」 升序，同一季内下标顺序就是集数顺序。"""
+    def test_上游漏了ep字段不按下标猜集数(self) -> None:
+        """分集表可能分页或缺集，缺映射就留给用户核对。"""
 
         eps = _s3_episodes(with_ep=False)
-        assert webhook.inner_episode(eps, 25) == 1
-        assert webhook.inner_episode(eps, 27) == 3
-        assert webhook.inner_episode(eps, 36) == 12
+        assert webhook.inner_episode(eps, 25) == 0
+        assert webhook.inner_episode(eps, 27) == 0
+        assert webhook.inner_episode(eps, 36) == 0
 
 
 class Test连续编号自动还原:
-    """body 里没写 「${currentEpisodeNumber}」 时，靠 Bangumi 分集表把它算回来。
+    """本次事件只有连续编号时，靠 Bangumi 分集表还原。
 
     这是 1.2.9 的主线：用户的 ani-rss 模板只给了 「${episode}」，年番第三季推来的是
     27，卡片会写「第 27 集 · 共 12 集」，回填还会把 12 集的条目直接顶成假完结。
@@ -415,13 +479,14 @@ class Test连续编号自动还原:
         assert bangumi.subject_calls == 1
         assert bangumi.episode_calls == 1
 
-    async def test_模板给全了就一次网络都不发(self) -> None:
+    async def test_订阅统计存在也必须按本次编号查表(self) -> None:
         bangumi = _S3Bangumi()
         service = _service(NexusConfig(enable_cross_match=False), bangumi=bangumi)
-        note = await service.build(self._body(currentEpisodeNumber="3", totalEpisodeNumber="12"))
+        note = await service.build(self._body(currentEpisodeNumber="10", totalEpisodeNumber="12"))
         assert note.payload["current_episode"] == 3
         assert bangumi.subject_calls == 0
-        assert bangumi.episode_calls == 0
+        assert bangumi.episode_calls == 1
+        assert note.payload["subscription_progress"] == 10
 
     async def test_普通番剧不查分集表(self) -> None:
         """编号没超出总集数就是普通番剧，两个数本来一样，不该为此多打一次 API。"""
@@ -434,13 +499,13 @@ class Test连续编号自动还原:
         assert bangumi.episode_calls == 0
         assert "进度：第 1 季第 07 集 · 共 12 集" in note.lines
 
-    async def test_容差之内也不查(self) -> None:
-        """容差留给带 SP 的番：12 集的条目推第 14 集不足以判定是连续编号。"""
+    async def test_只超出两集也查表避免续季开头报错(self) -> None:
+        """12 集续季的 13、14 可能正是季内第 1、2 集。"""
 
         bangumi = _S3Bangumi()
         service = _service(NexusConfig(enable_cross_match=False), bangumi=bangumi)
         await service.build(self._body(episode="14"))
-        assert bangumi.episode_calls == 0
+        assert bangumi.episode_calls == 1
 
     async def test_没有条目ID就整段跳过(self) -> None:
         """磁力链接里没有条目 ID，此时宁可什么都不补。"""
@@ -461,7 +526,8 @@ class Test连续编号自动还原:
         service = _service(NexusConfig(enable_cross_match=False), bangumi=_Broken())
         note = await service.build(self._body())
         assert note.payload["current_episode"] == 0
-        assert "进度：第 3 季第 27 集 · 共 12 集" in note.lines
+        assert "源编号：S03E27 · 共 12 集（本季集数未确认，不回填进度）" in note.lines
+        assert note.payload["event_episode"] == 0
 
     async def test_条目拉不到也不拦主流程(self) -> None:
         """总集数是判定前提，取不到就判不出「超出总集数」，安静退回原样。"""
@@ -1295,6 +1361,19 @@ class Test首推补追番接线:
         await service.handle(_download())
         assert store.created == []
         assert store.updated == [(9, 3)]
+
+    @pytest.mark.parametrize(
+        ("episode", "aggregate", "expected"),
+        [("8", "10", [(9, 8)]), ("12.5", "12", []), ("27", "10", []), ("", "10", [])],
+    )
+    async def test_回填只写本次确认的整集(
+        self, episode: str, aggregate: str, expected: list[tuple[int, int]]
+    ) -> None:
+        service, _, store, _ = _wired(self._conf(webhook_auto_watch=False), has=(GROUP_UMO,))
+        await service.handle(
+            _download(episode=episode, currentEpisodeNumber=aggregate, totalEpisodeNumber="12")
+        )
+        assert store.updated == expected
 
     async def test_表里已有就不重复建(self) -> None:
         service, _, store, _ = _wired(self._conf(), has=(GROUP_UMO,))

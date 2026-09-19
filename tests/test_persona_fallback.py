@@ -16,6 +16,7 @@ from typing import Any, cast
 import pytest
 
 from nexus.config import NexusConfig
+from nexus.episode_numbers import episode_claims_match
 from nexus.models import Notification
 from nexus.services import notifier as notifier_module
 from nexus.services.notifier import PERSONA_RETRY_DELAY, Notifier, _fallback_line
@@ -274,3 +275,52 @@ class Test兜底文案:
         """标题空着的通知现实里出现过（上游模板没填），卡片不能因此缺一段。"""
 
         assert _fallback_line(Notification(kind="test", title="")) == "《番剧》有新动态。"
+
+
+class Test播报集数校验:
+    @pytest.mark.parametrize(
+        "line", ["第27集下好了", "第二十七话下好了", "S03E27 下载完成", "EP27 好了"]
+    )
+    def test_不能把源编号说成季内集数(self, line: str) -> None:
+        assert not episode_claims_match(line, 3)
+
+    @pytest.mark.parametrize("line", ["第3集下好了", "第三话下好了", "第０３集下好了", "更新啦"])
+    def test_正确集数与不报集数都接受(self, line: str) -> None:
+        assert episode_claims_match(line, 3)
+
+    def test_特别篇不允许说成整集(self) -> None:
+        assert episode_claims_match("第十二点五集下好啦", 12.5)
+        assert not episode_claims_match("第十二集下好啦", 12.5)
+
+    async def test_误报先重试仍错则使用确定文案(self, slept: list[float]) -> None:
+        notice = Notification(
+            kind="download_complete",
+            title="某番 第三季",
+            subtitle="下载完成",
+            lines=("进度：第 3 季第 03 集 · 共 12 集（源编号 S03E27）",),
+            payload={
+                "persona_facts": "某番 第三季\n第 03 集下载完成",
+                "event_episode": 3,
+                "event_marker": "第 3 季第 03 集",
+            },
+        )
+        gateway = _Gateway("第27集下好了", "第二十七集下好了")
+        notifier, activity = _notifier(gateway)
+        assert (
+            await notifier._persona_line(notice, UMO)
+            == "《某番 第三季》第 3 季第 03 集，下载完成。"
+        )
+        assert len(gateway.calls) == 2
+        assert "S03E27" not in gateway.calls[0]["prompt"]
+        assert "共 12 集" not in gateway.calls[0]["prompt"]
+        assert len(activity.matched("已拦截")) == 2
+
+    async def test_未知集数不能凭空生成第1集(self, slept: list[float]) -> None:
+        notice = Notification(
+            kind="download_complete",
+            title="某番",
+            subtitle="下载完成",
+            payload={"persona_facts": "集数未确认", "event_episode": 0},
+        )
+        notifier, _ = _notifier(_Gateway("第1集下好了"), fallback_line=False)
+        assert await notifier._persona_line(notice, UMO) == ""

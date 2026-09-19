@@ -1900,12 +1900,9 @@ const ANIRSS_EXPORT_CMD =
   'curl -s -X POST "http://127.0.0.1:7789/api/listAni" -H "api-key: 你的APIKey" -o ani.json';
 
 // ani-rss 的 WebHook 只能把占位符拼进 body，所以这里给一份「刚够用」的模板：
-// 事件名 / 番名 / 季集 / 季内集号 / 总集数 / 封面 / bgm 链接 / 字幕组 / 评分，
-// 最后带上 ani-rss 自己拼好的整段文本。
-// 「currentEpisodeNumber」 和 「totalEpisodeNumber」 是年番的关键：「episode」 给的是字幕组的
-// 连续编号（第三季第 9 集会写成 29），只有这两个字段能一步算出「这季的第几集 / 共几集」。
-// 上游给不出它们时（ani-rss 3.0 之前、或别的下载器）插件会用 Bangumi 分集表把连续编号还原回来，
-// 但那条路依赖 「bgmUrl」 —— 所以 「url」 这一项在任何模板里都不能省。
+// episode 是本次事件集号；currentEpisodeNumber 是订阅统计，不能覆盖本次集号。
+// totalEpisodeNumber 用于展示和校验，bgmUrl 必须对应正确季度。
+// 超出总集数时尝试按 Bangumi 明确的分集映射还原，无法确认则只展示源编号，不回填。
 // ⚠ 每个占位符都要用引号包住，「${message}」 也一样 —— ani-rss 只负责把内容里的引号和换行转义掉，
 //   不会替你补外层引号；少了这一对，整个 body 就不是合法 JSON，每条推送都会被原样回 400。
 const WEBHOOK_BODY_TPL =

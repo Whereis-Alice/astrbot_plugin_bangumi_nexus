@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from astrbot.api import logger
 from astrbot.api.message_components import Image, Plain
 from astrbot.core.message.message_event_result import MessageChain
 
+from ..episode_numbers import episode_claims_match, episode_number
 from ..models import FeedItem, Notification
 from ..platforms import Instances, describe, live_platforms, pick_platform_id, remap_umo
 from ..render import build_feed_card, build_notice_card
@@ -210,9 +211,29 @@ class Notifier:
         以为插件坏了。兜底文案不经过 LLM，所以永远不会再失败。
         """
         fallback = _fallback_line(notification) if self._deps.conf.persona_fallback_line else ""
-        return await self.speak(notification.plain_text(), umo, fallback=fallback)
+        facts = notification.payload.get("persona_facts")
+        validator = None
+        if isinstance(facts, str) and "event_episode" in notification.payload:
+            expected = episode_number(notification.payload["event_episode"])
 
-    async def speak(self, facts: str, umo: str, *, fallback: str = "") -> str:
+            def validator(text: str) -> bool:
+                return episode_claims_match(text.replace(notification.title, ""), expected)
+
+        return await self.speak(
+            facts if isinstance(facts, str) else notification.plain_text(),
+            umo,
+            fallback=fallback,
+            validator=validator,
+        )
+
+    async def speak(
+        self,
+        facts: str,
+        umo: str,
+        *,
+        fallback: str = "",
+        validator: Callable[[str], bool] | None = None,
+    ) -> str:
         """给定事实文本，让人格用自己的口吻转述一句。
 
         失败会重试一次（间隔 「PERSONA_RETRY_DELAY」）。只在真的挂着 LLM 提供商时
@@ -235,8 +256,10 @@ class Notifier:
                 limit=max(40, conf.persona_max_chars),
             )
             spoken = text.replace("\n", " ").strip()
-            if spoken:
+            if spoken and (validator is None or validator(spoken)):
                 return spoken
+            if spoken and validator is not None:
+                deps.activity.warn("notify", "人格转述集数与本次事件不符，已拦截")
             if attempt < attempts:
                 await asyncio.sleep(PERSONA_RETRY_DELAY)
         if fallback:
@@ -462,6 +485,9 @@ def _fallback_line(notification: Notification) -> str:
     """
 
     title = notification.title or "番剧"
+    marker = notification.payload.get("event_marker")
+    if marker and marker not in notification.subtitle:
+        return f"《{title}》{marker}，{notification.subtitle or '有新动态'}。"
     if notification.subtitle:
         return f"《{title}》{notification.subtitle}。"
     return f"《{title}》有新动态。"

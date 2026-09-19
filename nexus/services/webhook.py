@@ -28,17 +28,19 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from ..models import Episode, Notification, Subject
+from astrbot.api import logger
+
+from ..episode_numbers import episode_label, episode_number, inner_episode, progress_episode
+from ..models import Notification, Subject
 from ..titles import MATCH_THRESHOLD, qualify_season, similarity
 from .base import Deps
 from .notifier import Notifier
 from .search import RESOLVE_CANDIDATES, pick_by_season
 from .watchlist import (
-    NUMBERING_SLACK,
     STATUS_DROPPED,
     WatchlistService,
     backfill_progress,
@@ -113,6 +115,9 @@ KIND_PHRASE = {
 # 这些事件意味着「这一集已经能看了」，可以顺手推进追番进度。
 PROGRESS_KINDS = frozenset({"rename_complete", "download_complete"})
 
+# 订阅级提醒没有本次单集，ani-rss 占位符默认给出的 1 不能当作真实集号。
+SERIES_KINDS = frozenset({"series_completed", "idle_warning", "rss_error", "episode_missing"})
+
 #: 自动建了追番条目时追加到卡片正文的一行。
 #: 悄悄改用户数据是大忌，卡片里必须能看出「表里为什么多了一条」。
 AUTO_WATCH_LINE = "已自动加入追番表"
@@ -144,7 +149,7 @@ PLACEHOLDER_COVERS = ("docs.wushuo.top/null.png", "/null.png")
 
 # 「S01E05」/「s1e5.5」 这类进度串。ani-rss 的 「${text}」 天然带它，
 # 于是就算用户没在 body 里单独写 episode 字段，进度回填也不会失效。
-EPISODE_PATTERN = re.compile(r"S(\d{1,2})E(\d{1,3})", re.IGNORECASE)
+EPISODE_PATTERN = re.compile(r"S(\d{1,2})E(\d+(?:\.\d+)?)(?![\d.])", re.IGNORECASE)
 
 #: 链接里的 Bangumi 条目 ID。ani-rss 每条通知都带 「${bgmUrl}」，这是全链路唯一
 #: 零歧义的作品标识 —— 靠标题反查季度必然出错（Bangumi 搜索压根不认季度后缀），
@@ -286,11 +291,11 @@ class WebhookService:
         kind = classify(raw)
         title = _first(raw, "title", "official_title", "name", "bangumi_name") or "未知番剧"
         season = _as_int(_first(raw, "season", "season_num"))
-        episode = _as_int(_first(raw, "episode", "episode_num", "ep"))
-        # 季内集数与总集数是 ani-rss 3.x 才有的字段，能把「字幕组连续编号」和
-        # 「这季的第几集」分开。缺了它就只能拿连续编号当集数，年番第三季会得到
-        # 「第 29 集」这种一看就不对的进度。
-        current = _as_int(_first(raw, "current_episode", "currentEpisodeNumber", "current_ep"))
+        episode = episode_number(_first(raw, "episode", "episode_num", "ep"))
+        # ani-rss 的驼峰字段是订阅统计，可能是资源条数或最大集号，不能覆盖本次事件。
+        # 其他下载器显式提供的季内集数别名仍保留，避免破坏已有自定义接入。
+        current = episode_number(_first(raw, "current_episode", "current_ep"))
+        subscription_progress = _as_int(_first(raw, "currentEpisodeNumber"))
         total = _as_int(_first(raw, "total_episodes", "totalEpisodeNumber", "total_ep", "eps"))
         cover = _first(raw, "poster_url", "poster", "image", "cover")
         if cover and any(mark in cover for mark in PLACEHOLDER_COVERS):
@@ -304,6 +309,8 @@ class WebhookService:
             hint_season, hint_episode = parse_episode_marker(message)
             episode = hint_episode
             season = season or hint_season
+        if kind in SERIES_KINDS:
+            episode = current = 0.0
         # 条目 ID 从链接里捡：显式字段 → 「url」 → 连 「${message}」 都翻一遍，
         # 用户的 body 模板哪种写法都不至于白丢这个信息。
         subject_id = parse_subject_id(
@@ -329,10 +336,16 @@ class WebhookService:
 
         lines: list[str] = []
         inner = current or episode
-        marker = _episode_marker(season, inner)
-        progress = _progress_line(season, episode, current, total)
+        unresolved = bool(total and int(inner) > total)
+        event_episode = 0.0 if unresolved else inner
+        marker = _episode_marker(season, event_episode) if event_episode else ""
+        progress = _progress_line(season, episode, current, total, unresolved=unresolved)
         if progress:
             lines.append(progress)
+        if event_episode and not event_episode.is_integer():
+            lines.append("小数集数 / 特别篇：保留原编号，不回填正片进度")
+        if subscription_progress:
+            lines.append(f"订阅统计：{subscription_progress}（不代表本次下载集数）")
         details = 0
         for label, key in (
             ("种子", "torrent_name"),
@@ -350,7 +363,7 @@ class WebhookService:
         if error:
             lines.append(f"错误：{error}")
             details += 1
-        if message and not details:
+        if message and not details and not inner:
             # 结构化字段一个都没解析出来才回落到上游原文 —— 解析成功时它整段都是
             # 重复内容（同样的进度、字幕组、评分再说一遍），还会顺带把本机下载路径
             # 播进群里。详见 「_message_fallback」。
@@ -366,6 +379,23 @@ class WebhookService:
             cover = await self._cover_for(display_title, subject_id, subject=subject)
 
         subtitle = KIND_PHRASE.get(kind, "番剧通知")
+        # 人格只读本次事件，源编号、总集数和订阅统计只留在卡片上供核对。
+        persona_lines = [display_title, subtitle]
+        persona_lines.append(
+            f"本次事件：{marker}" if marker else "本次集数未确认，请勿自行补写集数。"
+        )
+        subgroup = _first(raw, "subgroup", "subgroups")
+        if subgroup:
+            persona_lines.append(f"字幕组：{subgroup}")
+        persona_lines.append("只转述上述事实，集数必须保持原值，不要自行换算或使用其他编号。")
+        # 留下足够复核的数字，不记录 Body、请求头、令牌或本机下载路径。
+        diagnostic = (
+            f"Webhook 集数 subject={subject_id} kind={kind} "
+            f"episode={episode:g} subscription={subscription_progress} "
+            f"event={event_episode:g} total={total} unresolved={unresolved}"
+        )
+        self._deps.activity.info("webhook", diagnostic)
+        logger.info(f"[番剧中枢] {diagnostic}")
         if marker and kind == "new_episode":
             subtitle = f"{marker} · {subtitle}"
         return Notification(
@@ -380,6 +410,10 @@ class WebhookService:
                 "season": season,
                 "episode": episode,
                 "current_episode": current,
+                "event_episode": event_episode,
+                "subscription_progress": subscription_progress,
+                "persona_facts": "\n".join(persona_lines),
+                "event_marker": marker,
                 "total_episodes": total,
                 "subject_id": subject_id,
             },
@@ -422,23 +456,15 @@ class WebhookService:
         except Exception:  # noqa: BLE001 - 条目可能已被删除或 API 抖动
             return None
 
-    async def _inner_for(self, subject_id: int, episode: int, total: int) -> int:
-        """把字幕组的连续编号换回季内集数，换不出来返回 0。
+    async def _inner_for(self, subject_id: int, episode: float, total: int) -> float:
+        """编号超出本季总集数才查分集表，避免对已做偏移的集数重复换算。
 
-        为什么需要这一步：ani-rss 3.x 有 「${currentEpisodeNumber}」 这个字段，但用户的
-        body 模板不一定填 —— 旧模板、别的下载器都可能只给一个编号。缺了它，年番第三季
-        的第 3 集推过来就是个 27：卡片写「第 27 集 · 共 12 集」，进度回填也只能整条放弃。
-
-        Bangumi 的分集表恰好同时给两个数：「sort」 是从第一季数起的连续编号，「ep」 是
-        季内集数（第三季第 1 集 = 「ep 1 / sort 25」）。拿上游那个数去对 「sort」，命中
-        就读出 「ep」。对不上宁可返回 0 —— 猜错季度比不猜更糟。
-
-        只在编号明显超出总集数时才查，容差与回填共用 「NUMBERING_SLACK」：普通番剧两个
-        数本来就一样，不该为此多打一次 API。
+        不再使用两集容差：12 集续季的源编号 13 恰好可能是季内第 1 集。
+        查不到明确映射时由调用方标为未确认，不能以列表下标补出一个集号。
         """
         if not subject_id or episode <= 0 or total <= 0:
             return 0
-        if episode <= total + NUMBERING_SLACK:
+        if episode <= total:
             return 0
         try:
             episodes = await self._deps.hub.bangumi.episodes(subject_id)
@@ -447,7 +473,7 @@ class WebhookService:
         inner = inner_episode(episodes, episode)
         if inner:
             self._deps.activity.info(
-                "webhook", f"连续编号 {episode} 按 Bangumi 分集表还原为第 {inner} 集"
+                "webhook", f"连续编号 {episode:g} 按 Bangumi 分集表还原为第 {inner:g} 集"
             )
         return inner
 
@@ -540,14 +566,13 @@ class WebhookService:
             )
             self._created += len(created)
         if conf.webhook_auto_progress:
-            # 季内集数优先于字幕组的连续编号：年番第三季的 「S03E29」 里，29 是
-            # 从第一季数起的总编号，写进「全 12 话」的条目会直接假完结。
+            # 只认本次确认的整集，不用订阅统计，也不截断特别篇编号。
             payload = notification.payload
             await backfill_progress(
                 deps,
                 self._watchlist,
                 title=notification.title,
-                episode=_as_int(payload.get("current_episode")) or _as_int(payload.get("episode")),
+                episode=progress_episode(payload.get("event_episode")),
                 targets=targets,
                 channel="webhook",
                 total=_as_int(payload.get("total_episodes")),
@@ -639,52 +664,35 @@ def classify(raw: Mapping[str, Any]) -> str:
     return "new_episode"
 
 
-def _episode_marker(season: int, episode: int) -> str:
+def _episode_marker(season: int, episode: float) -> str:
     """拼出 「第 2 季第 07 集」 这样的进度串。"""
     parts = []
     if season:
         parts.append(f"第 {season} 季")
     if episode:
-        parts.append(f"第 {episode:02d} 集")
+        parts.append(f"第 {episode_label(episode)} 集")
     return "".join(parts)
 
 
-def _progress_line(season: int, episode: int, current: int, total: int) -> str:
-    """拼出卡片正文里那行「进度：……」。
-
-    ani-rss 的 「${episode}」 是**字幕组的连续编号**：年番拍到第三季，它给的是 29；
-    「${currentEpisodeNumber}」 才是季内集数 9。两者不一致时两个都要写出来 ——
-    只写 29 会让人以为这季有 29 集，只写 9 又对不上文件名，回头找片子没法核对。
-    """
+def _progress_line(
+    season: int, episode: float, current: float, total: int, *, unresolved: bool = False
+) -> str:
+    """展示本次事件编号；转换成功才并列源编号，失败时明确说明未确认。"""
     inner = current or episode
+    if unresolved:
+        source = f"S{season:02d}E{episode_label(inner)}" if season else f"E{episode_label(inner)}"
+        return f"源编号：{source} · 共 {total} 集（本季集数未确认，不回填进度）"
     text = _episode_marker(season, inner)
     if not text:
         return ""
     if total:
         text += f" · 共 {total} 集"
     if current and episode and current != episode:
-        source = f"S{season:02d}E{episode:02d}" if season else f"E{episode:02d}"
+        source = (
+            f"S{season:02d}E{episode_label(episode)}" if season else f"E{episode_label(episode)}"
+        )
         text += f"（源编号 {source}）"
     return f"进度：{text}"
-
-
-def inner_episode(episodes: Sequence[Episode], absolute: int) -> int:
-    """在 Bangumi 分集表里按连续编号反查季内集数，查不到返回 0。
-
-    只认 「sort」 的精确匹配。差一点就放弃是有意的：这个数会直接写进追番进度，
-    宁可这次不动，也不要把第三季的第 3 集记成第 27 集或者第 4 集。
-
-    有些条目的 「ep」 字段是空的，此时用下标 +1 兜底 —— 上游返回已按 「sort」
-    升序排好，同一季内的下标顺序就是集数顺序。
-    """
-    if absolute <= 0:
-        return 0
-    for index, episode in enumerate(episodes):
-        if int(episode.sort) != absolute:
-            continue
-        inner = int(episode.ep or 0)
-        return inner if inner > 0 else index + 1
-    return 0
 
 
 def parse_subject_id(*texts: str) -> int:
@@ -735,31 +743,18 @@ def _first(raw: Mapping[str, Any], *keys: str) -> str:
     return ""
 
 
-def parse_episode_marker(text: str) -> tuple[int, int]:
-    """从 「S01E05」 这类串里抠出季号与集号，抠不到返回 「(0, 0)」。"""
-    match = EPISODE_PATTERN.search(text or "")
-    if not match:
-        return 0, 0
-    return _as_int(match.group(1)), _as_int(match.group(2))
+def parse_episode_marker(text: str) -> tuple[int, float]:
+    """只接受正文中唯一的季集编号；多集缺集通知不能随便挑第一集。"""
+    markers = {
+        (_as_int(match[1]), episode_number(match[2]))
+        for match in EPISODE_PATTERN.finditer(text or "")
+    }
+    return markers.pop() if len(markers) == 1 else (0, 0.0)
 
 
 def _as_int(value: Any) -> int:
-    """尽量把值折成整数。
-
-    ani-rss 对半集（总集篇、OVA）会给出 「5.5」，直接 「int("5.5")」 会抛
-    「ValueError」 把集数丢成 0，所以先按整数试，再退一步过 float 截断。
-    """
-    text = str(value).strip()
-    if not text:
-        return 0
-    try:
-        return int(text)
-    except (TypeError, ValueError):
-        pass
-    try:
-        return int(float(text))
-    except (TypeError, ValueError):
-        return 0
+    """季号、条目 ID 与总集数只接受正整数，拒绝小数及非有限值。"""
+    return progress_episode(value)
 
 
 def _as_mapping(raw: Any) -> Mapping[str, Any] | None:

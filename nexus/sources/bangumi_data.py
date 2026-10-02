@@ -14,6 +14,7 @@ Licensed under the GNU Affero General Public License v3.0 or later.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -22,6 +23,7 @@ from ..constants import BANGUMI_DATA_CDN, BANGUMI_DATA_RAW
 from ..http import FetchError, HttpClient
 from ..models import DataItem, SiteRef
 from ..titles import (
+    JST,
     Broadcast,
     alias_keys,
     best_match,
@@ -40,6 +42,9 @@ AIRING_TYPES = frozenset({"tv", "web"})
 #: 但也有一批老条目是「忘了填」。年番满打满算 53 周，留到 400 天足够覆盖，
 #: 又不至于把几年前的僵尸条目一起捞上来。
 OPEN_ENDED_MAX_DAYS = 400
+
+# 月表会持续补结束日期；HTTP 缓存之外的对象缓存也必须有期限。
+MONTH_CACHE_SECONDS = 6 * 3600
 
 #: 只有这些站点的链接对用户有意义，其余（字幕组内部 ID 等）不展示。
 WATCHABLE_SITES = (
@@ -137,43 +142,51 @@ class BangumiDataSource:
         self._by_month: dict[tuple[int, int], tuple[DataItem, ...]] = {}
         self._alias_index: dict[str, DataItem] = {}
         self._bangumi_index: dict[str, DataItem] = {}
+        self._month_fetched: dict[tuple[int, int], float] = {}
+        self._month_locks: dict[tuple[int, int], asyncio.Lock] = {}
 
     async def month(self, year: int, month: int) -> tuple[DataItem, ...]:
-        """取某个月的分片。未来月份还没发布时返回空元组，不算错误。
+        """月表六小时刷新一次，同月并发合并；抓取失败保留旧表但不重置时限。"""
+        key = (year, month)
+        lock = self._month_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            cached = self._by_month.get(key)
+            if (
+                cached is not None
+                and time.monotonic() - self._month_fetched.get(key, 0) < MONTH_CACHE_SECONDS
+            ):
+                return cached
+            return await self._fetch_month(year, month)
 
-        bangumi-data 是「拍好了才上」，下一季的月份文件常常还不存在（404）。
-        这种空结果**不进内存缓存**：等上游发布之后下一次刷新就能拿到，
-        否则要等到插件重载。刷屏问题交给 HTTP 层的负缓存处理。
-        """
-        cached = self._by_month.get((year, month))
-        if cached is not None:
-            return cached
+    async def _fetch_month(self, year: int, month: int) -> tuple[DataItem, ...]:
+        """成功刷新后重建索引，清除已删除条目与旧结束日期，避免 setdefault 固化旧值。"""
         path = f"{year:04d}/{month:02d}.json"
         raw: Any = None
-        absent = False
         for base in (BANGUMI_DATA_CDN, BANGUMI_DATA_RAW):
             try:
                 raw = await self._http.fetch_json(
-                    f"{base}/{path}", cache_key=f"bgmdata:{path}", ttl=6 * 3600
+                    f"{base}/{path}", cache_key=f"bgmdata:{path}", ttl=MONTH_CACHE_SECONDS
                 )
                 break
-            except FetchError as error:
-                absent = absent or error.absent
+            except FetchError:
                 continue
+        if not isinstance(raw, list):
+            return self._by_month.get((year, month), ())
         items = tuple(parse_item(entry) for entry in raw or () if isinstance(entry, dict))
-        if items or not absent:
-            # 只有「确实抓到了」或「失败原因不是 404」才记忆结果；
-            # 未来月份留白，好让它发布当天就能被捞到
-            self._by_month[(year, month)] = items
-        self._index(items)
+        self._by_month[(year, month)] = items
+        self._month_fetched[(year, month)] = time.monotonic()
+        self._alias_index.clear()
+        self._bangumi_index.clear()
+        for key in sorted(self._by_month):
+            self._index(self._by_month[key])
         return items
 
     def _index(self, items: tuple[DataItem, ...]) -> None:
         for item in items:
             for key in alias_keys(item.titles, item.title):
-                self._alias_index.setdefault(key, item)
+                self._alias_index[key] = item
             if item.bangumi_id:
-                self._bangumi_index.setdefault(item.bangumi_id, item)
+                self._bangumi_index[item.bangumi_id] = item
 
     async def season(self, code: str = "") -> tuple[DataItem, ...]:
         """一个季度（三个月）的全部条目。"""
@@ -254,16 +267,16 @@ class BangumiDataSource:
         return self._bangumi_index.get(wanted) if wanted else None
 
     def is_airing(self, item: DataItem, moment: datetime) -> bool:
-        """判断某条目在 「moment」 这一刻是否处于放送期。"""
+        """粗筛候选放送期；空 end 的 400 天窗口只用于召回，不能当成在播证据。"""
 
         if item.type not in AIRING_TYPES:
             return False
         begin = parse_datetime(item.begin)
-        if begin is None or begin > moment:
+        if begin is None or begin.astimezone(JST).date() > moment.astimezone(JST).date():
             return False
         end = parse_datetime(item.end)
         if end is not None:
-            return end >= moment
+            return end.astimezone(JST).date() >= moment.astimezone(JST).date()
         return moment - begin <= timedelta(days=OPEN_ENDED_MAX_DAYS)
 
     async def airing(
@@ -280,6 +293,18 @@ class BangumiDataSource:
 
         await self.warm(span=span)
         moment = now or datetime.now(UTC)
+        # 换到十月后，左右各两季的窗口从四月开始，会漏掉二月开播的年番。
+        # 额外只补过去的月份，不扩大未来月份窗口；重启后也能找回真实在播年番。
+        first = moment - timedelta(days=OPEN_ENDED_MAX_DAYS)
+        start_month = first.year * 12 + first.month - 1
+        end_month = moment.year * 12 + moment.month - 1
+        await asyncio.gather(
+            *(
+                self.month(index // 12, index % 12 + 1)
+                for index in range(start_month, end_month + 1)
+            ),
+            return_exceptions=True,
+        )
         picked: dict[tuple[str, str], tuple[DataItem, Broadcast]] = {}
         for items in self._by_month.values():
             for item in items:

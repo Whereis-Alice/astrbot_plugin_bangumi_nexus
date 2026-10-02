@@ -731,15 +731,15 @@ def build_today_card(
     if extra_tiles:
         sections.append(
             _block(
-                "长期连载",
+                "跨季续播",
                 f'<div class="grid c2">{"".join(extra_tiles)}</div>',
-                hint="年番 / 半年番，今天也在播",
+                hint="已核验放送期的补充条目",
             )
         )
     body = f'<div class="body">{"".join(sections)}</div>'
     stats = [_stat(len(day.items), "TITLES", accent=True)]
     if long_running:
-        stats.append(_stat(len(long_running), "LONG RUN"))
+        stats.append(_stat(len(long_running), "CONTINUING"))
     # 「TITLES」 统计的是今天的总数，主栏却只列前 「limit」 部。两个数字对不上时
     # 必须在副标题里说清楚，否则用户会以为插件把番漏掉了 —— 这正是 1.1.3 的用户反馈。
     sub = order_note

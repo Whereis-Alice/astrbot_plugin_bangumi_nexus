@@ -113,11 +113,11 @@ class TestTodayCard:
             times={99: "18:00"},
             long_running=[extra],
         )
-        assert "长期连载" in html
+        assert "跨季续播" in html
         assert "某年番" in html
         # 主栏统计只数当季那两部，不能被补进来的年番顶高。
         assert '<b class="accent">2</b>' in html
-        assert "LONG RUN" in html
+        assert "CONTINUING" in html
 
     def test_long_running_tiles_are_unnumbered(self) -> None:
         """补番不参与当季排名，带上序号会像是评分排到了前面。"""

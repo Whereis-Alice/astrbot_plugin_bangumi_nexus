@@ -33,6 +33,7 @@ from ..titles import (
     season_number,
     similarity,
 )
+from .airing import AiringFilter
 from .base import (
     Deps,
     Reply,
@@ -56,6 +57,9 @@ LONG_RUN_SPAN = 2
 #: 「长期连载」 那一栏最多显示几部。这一栏是补充，不该抢当季新番的版面，
 #: 但也不能卡得太死 —— 实测周日在播的年番就有 7 部，卡在 6 会无声吞掉一部。
 LONG_RUN_LIMIT = 8
+
+# 核验前多召回候选，防止已完结条目占满展示额度；也限制异常索引造成的请求量。
+LONG_RUN_CANDIDATE_LIMIT = 48
 
 #: 今日放送主栏最多列几部。多出来的部分在卡片副标题上明说，而不是悄悄截断。
 TODAY_LIMIT = 12
@@ -123,18 +127,45 @@ async def _long_running(
         )
     except Exception:  # noqa: BLE001 - 这一栏是补充，挂了不该拖垮整张卡
         return ()
-    wanted = [(item, slot) for item, slot in pairs if item.bangumi_id][:limit]
+    # 先核验再截断，否则最前面的完结旧番会挤掉后面真正仍在播的年番。
+    wanted = [(item, slot) for item, slot in pairs if item.bangumi_id][:LONG_RUN_CANDIDATE_LIMIT]
     if not wanted:
         return ()
     fetched = await asyncio.gather(
-        *(deps.hub.bangumi.subject(int(item.bangumi_id)) for item, _ in wanted),
+        *(
+            asyncio.wait_for(deps.hub.bangumi.subject(int(item.bangumi_id)), timeout=12)
+            for item, _ in wanted
+        ),
         return_exceptions=True,
     )
     result: list[tuple[Subject, str]] = []
     for (_, slot), subject in zip(wanted, fetched, strict=False):
         if isinstance(subject, Subject):
             result.append((subject, slot.slot_label))
-    return tuple(result)
+    verified = await AiringFilter(deps).filter(
+        [subject for subject, _ in result], supplemental=True
+    )
+    allowed = {subject.id for subject in verified}
+    return tuple(pair for pair in result if pair[0].id in allowed)[:limit]
+
+
+async def _current_airings(
+    deps: Deps, days: Sequence[CalendarDay], weekday: int
+) -> tuple[CalendarDay, tuple[tuple[Subject, str], ...]]:
+    """手动今日查询与定时播报共用放送期核验，主栏为空也不能漏掉在播年番。"""
+
+    day = _pick_day(days, weekday) or CalendarDay(
+        weekday=weekday, label=WEEKDAY_CN[(weekday - 1) % 7], items=()
+    )
+    try:
+        await deps.hub.bangumi_data.warm(span=LONG_RUN_SPAN)
+    except Exception:  # noqa: BLE001 - 补充索引失败仍可用 Bangumi 判断
+        pass
+    items, extras = await asyncio.gather(
+        AiringFilter(deps).filter(day.items),
+        _long_running(deps, weekday=weekday, days=days, limit=LONG_RUN_LIMIT),
+    )
+    return CalendarDay(weekday=day.weekday, label=day.label, items=items), extras
 
 
 async def _watched_titles(deps: Deps, umo: str) -> tuple[str, ...]:
@@ -422,15 +453,14 @@ class SearchService:
         deps = self._deps
         conf = deps.conf
         days = await deps.hub.bangumi.calendar()
-        day = _pick_day(days, weekday)
-        if day is None or not day.items:
+        day, extras = await _current_airings(deps, days, weekday)
+        if not day.items and not extras:
             label = WEEKDAY_CN[(weekday - 1) % 7]
             return Reply.plain(f"{label}没有查到放送中的番。")
 
         items = sorted(day.items, key=lambda item: (-item.score, -item.doing))
         theme, _ = await style_for(deps, umo)
         limit = TODAY_LIMIT
-        extras = await _long_running(deps, weekday=weekday, days=days, limit=LONG_RUN_LIMIT)
         long_items = [subject for subject, _ in extras]
         shown = items[:limit] + long_items
         covers = await cover_map(deps, ((item.id, item.image) for item in shown))
@@ -470,9 +500,7 @@ class SearchService:
         deps = self._deps
         conf = deps.conf
         days = await deps.hub.bangumi.calendar()
-        day = _pick_day(days, weekday)
-        if day is None or not day.items:
-            return Reply()
+        day, extras = await _current_airings(deps, days, weekday)
         picked = [
             item
             for item in day.items
@@ -486,15 +514,19 @@ class SearchService:
             if not wanted:
                 return Reply()
             picked = [item for item in picked if _in_watchlist(item, wanted)]
-        if not picked:
+        extras = tuple(
+            pair
+            for pair in extras
+            if pair[0].score >= conf.push_min_score and pair[0].doing >= conf.push_min_doing
+        )
+        if wanted:
+            # 年番那一栏同样要过滤，否则开了「只播我追的番」还是会冒出没追的年番。
+            extras = tuple(pair for pair in extras if _in_watchlist(pair[0], wanted))
+        if not picked and not extras:
             return Reply()
         ordered = _sort_subjects(picked, conf.push_sort_by, conf.push_sort_order)
         limit = max(1, conf.push_max_items)
         theme, _ = await style_for(deps, umo)
-        extras = await _long_running(deps, weekday=weekday, days=days, limit=LONG_RUN_LIMIT)
-        if wanted:
-            # 年番那一栏同样要过滤，否则开了「只播我追的番」还是会冒出没追的年番。
-            extras = tuple(pair for pair in extras if _in_watchlist(pair[0], wanted))
         long_items = [subject for subject, _ in extras]
         shown = ordered[:limit] + long_items
         covers = await cover_map(deps, ((item.id, item.image) for item in shown))
@@ -789,7 +821,7 @@ def _today_plain(
         lines.append(f"…还有 {len(day.items) - limit} 部")
     if extras:
         lines.append("")
-        lines.append("长期连载（年番 / 半年番）：")
+        lines.append("跨季续播（已核验放送期）：")
         for subject, label in extras:
             lines.append("· " + _today_line(subject, label))
     return "\n".join(lines)

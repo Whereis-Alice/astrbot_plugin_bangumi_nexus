@@ -18,13 +18,33 @@ Licensed under the GNU Affero General Public License v3.0 or later.
 from __future__ import annotations
 
 import asyncio
+import time
+from datetime import datetime
 
 from ..activity import ActivityLog
-from ..models import MatchResult, Subject
+from ..links import Link
+from ..models import DataItem, MatchResult, Subject
 from ..sources.bangumi_data import BangumiDataSource
 from ..sources.hub import SourceHub
 from ..sources.rss import mikan_bangumi_feed, mikan_search_feed
-from ..titles import Broadcast, humanize_delta, parse_broadcast
+from ..titles import (
+    JST,
+    Broadcast,
+    humanize_delta,
+    parse_broadcast,
+    parse_datetime,
+    season_number,
+    similarity,
+)
+
+LINK_TIMEOUT = 5.0
+LINK_CACHE_LIMIT = 128
+
+
+def _same_season(names: tuple[str, ...], candidate: str) -> bool:
+    """未标季数的正篇按第一季比较，不能把第二季入口挂在第一季下面。"""
+    seasons = {season_number(name) for name in names} - {None, 0}
+    return (season_number(candidate) or 1) in (seasons or {1})
 
 
 class Matcher:
@@ -40,6 +60,8 @@ class Matcher:
         self._hub = hub
         self._mikan_base = mikan_base
         self._activity = activity
+        self._link_cache: dict[tuple[int, str], tuple[float, tuple[Link, ...]]] = {}
+        self._notice_subjects: dict[tuple[int, str], tuple[float, Subject | None]] = {}
 
     def set_mikan_base(self, base: str) -> None:
         self._mikan_base = base or "https://mikanani.me"
@@ -82,10 +104,17 @@ class Matcher:
                 continue
             resolved[key] = outcome
 
+        for key in ("anime1", "age"):
+            entry = resolved.get(key)
+            if entry is not None and not _same_season(names, entry.title):
+                resolved.pop(key)
+
         season_entry = None
         season_pair = resolved.get("yuc")
         if isinstance(season_pair, tuple):
             season_entry = season_pair[0]
+            if season_entry and not _same_season(names, season_entry.display_name):
+                season_entry = None
 
         mikan_rss = ""
         mikan_id = str(data_item.mikan_id or "") if data_item is not None else ""
@@ -110,12 +139,17 @@ class Matcher:
 
     async def _resolve_data_item(
         self, subject: Subject | None, names: tuple[str, ...]
-    ) -> tuple[object | None, float]:
+    ) -> tuple[DataItem | None, float]:
         """先用 Bangumi ID 反查（最可靠），再退回标题匹配。"""
 
         data: BangumiDataSource = self._hub.bangumi_data
         if subject is not None and subject.id:
             try:
+                # 旧番不在当前季度预热范围内，先加载首播月，避免标题回退串到续作。
+                if subject.air_date and len(subject.air_date) >= 7:
+                    year, month = int(subject.air_date[:4]), int(subject.air_date[5:7])
+                    if 1 <= month <= 12:
+                        await data.month(year, month)
                 hit = await data.by_bangumi_id(subject.id)
             except Exception as error:  # noqa: BLE001 - 跨源匹配是增强，失败只降级
                 self._log(f"bangumi-data ID 反查失败：{error}", "warn")
@@ -131,6 +165,15 @@ class Matcher:
                 self._log(f"bangumi-data 标题匹配失败：{error}", "warn")
                 return None, 0.0
             if hit is not None:
+                if (
+                    subject
+                    and subject.id
+                    and hit.bangumi_id
+                    and str(hit.bangumi_id) != str(subject.id)
+                ):
+                    continue
+                if not _same_season(names, hit.title):
+                    continue
                 return hit, score
         return None, 0.0
 
@@ -152,6 +195,9 @@ class Matcher:
     def next_air_label(self, result: MatchResult) -> str:
         """「周日 23:30 · 2 天后」 这样的一行字。"""
 
+        end = parse_datetime(result.data_item.end) if result.data_item else None
+        if end and end.astimezone(JST).date() < datetime.now(JST).date():
+            return "已完结"
         broadcast = self.broadcast_of(result)
         if broadcast is None:
             if result.season and result.season.broadcast:
@@ -179,6 +225,90 @@ class Matcher:
                 seen.add(url)
                 unique.append((label, url))
         return tuple(unique)
+
+    def all_links(self, result: MatchResult) -> tuple[Link, ...]:
+        """条目信息链接与观看入口一起交给消息文本，图片模板不再承担链接展示。"""
+        links: list[Link] = []
+        if result.subject and result.subject.id:
+            links.append(("Bangumi 条目", f"https://bgm.tv/subject/{result.subject.id}"))
+        links.extend(self.watch_links(result))
+        official = result.data_item.official_site if result.data_item else ""
+        if not official and result.subject:
+            official = result.subject.infobox.get("官方网站", "")
+        if official:
+            links.append(("官网", official))
+        if result.moegirl:
+            links.append(("萌娘百科", result.moegirl.url))
+        return tuple(links)
+
+    async def notification_subject(self, subject_id: int, title: str) -> Subject | None:
+        """通知资料与链接共用一次身份解析；未知季数不借用续作的资料。"""
+        key = (subject_id, title)
+        cached = self._notice_subjects.get(key)
+        if cached and time.monotonic() < cached[0]:
+            return cached[1]
+        subject = None
+        try:
+            if subject_id:
+                subject = await asyncio.wait_for(self._hub.bangumi.subject(subject_id), timeout=2)
+            else:
+                hits = await asyncio.wait_for(self._hub.bangumi.search(title, limit=5), timeout=2)
+                candidates = [
+                    s
+                    for s in hits
+                    if _same_season((title,), s.display_name)
+                    and similarity(title, s.display_name) >= 0.82
+                ]
+                subject = max(
+                    candidates, key=lambda s: similarity(title, s.display_name), default=None
+                )
+        except Exception:  # noqa: BLE001 - 已有事件仍然要发送
+            pass
+        if len(self._notice_subjects) >= LINK_CACHE_LIMIT:
+            self._notice_subjects.pop(next(iter(self._notice_subjects)))
+        self._notice_subjects[key] = (time.monotonic() + (300 if subject else 30), subject)
+        return subject
+
+    async def notification_links(self, subject_id: int, title: str) -> tuple[Link, ...]:
+        """通知补入口有时限；慢站不拖住推送，多个会话复用短期缓存。"""
+        key = (subject_id, title)
+        cached = self._link_cache.get(key)
+        if cached and time.monotonic() < cached[0]:
+            return cached[1]
+        subject = await self.notification_subject(subject_id, title)
+        if subject is None:
+            return (("Bangumi 条目", f"https://bgm.tv/subject/{subject_id}"),) if subject_id else ()
+        names = _candidate_names(subject, subject.display_name)
+        calls = {
+            "data": self._resolve_data_item(subject, names),
+            "anime1": self._hub.anime1.match(*names),
+            "age": self._hub.age.match(*names),
+        }
+        tasks = {key: asyncio.create_task(call) for key, call in calls.items()}
+        try:
+            await asyncio.wait(tasks.values(), timeout=LINK_TIMEOUT)
+        finally:
+            for task in tasks.values():
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks.values(), return_exceptions=True)
+        values = {
+            key: task.result()
+            for key, task in tasks.items()
+            if not task.cancelled() and task.exception() is None
+        }
+        match = MatchResult(subject=subject)
+        if isinstance(values.get("data"), tuple):
+            match.data_item = values["data"][0]
+        for name in ("anime1", "age"):
+            hit = values.get(name)
+            if hit is not None and _same_season(names, hit.title):
+                setattr(match, name, hit)
+        links = self.all_links(match)
+        if len(self._link_cache) >= LINK_CACHE_LIMIT:
+            self._link_cache.pop(next(iter(self._link_cache)))
+        self._link_cache[key] = (time.monotonic() + 300, links)
+        return links
 
     def _log(self, message: str, level: str = "info") -> None:
         if self._activity is not None:

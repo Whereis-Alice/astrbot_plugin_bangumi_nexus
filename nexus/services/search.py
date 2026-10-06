@@ -12,6 +12,7 @@ import asyncio
 from collections.abc import Mapping, Sequence
 
 from ..constants import WEEKDAY_CN
+from ..links import link_caption
 from ..models import CalendarDay, MatchResult, Subject
 from ..render import (
     build_calendar_card,
@@ -357,14 +358,13 @@ class SearchService:
         theme, _ = theme_pair
         staff, _studio = staff_from_infobox(subject.infobox)
         next_air = deps.matcher.next_air_label(match)
-        links = deps.matcher.watch_links(match)
+        links = deps.matcher.all_links(match)
         html = build_subject_card(
             theme,
             match,
             width=conf.card_width,
             cover=cover,
             next_air=next_air,
-            watch_links=links,
             summary_override=summary,
             staff=staff,
             cast=cast,
@@ -634,8 +634,7 @@ class SearchService:
         title = match.title or query
         if not links:
             return Reply.plain(f"没找到「{title}」的在线观看入口，可能还没上线或者各站都没收录。")
-        lines = [f"{name} {url}" for name, url in links]
-        return Reply.plain("「" + title + "」在线观看：\n" + "\n".join(lines))
+        return Reply.plain("「" + title + "」\n" + link_caption(links))
 
     async def moegirl(self, umo: str, keyword: str) -> Reply:
         """萌娘百科词条摘要 —— 作品和角色都能查。"""
@@ -743,8 +742,7 @@ def _watch_caption(links: Sequence[tuple[str, str]]) -> str:
     卡片是图片，图里的链接点不动 —— 这也是上游插件被吐槽最多的一点。
     所以图之外再补一段纯文本，用户可以直接点。默认开启，嫌刷屏可以关。
     """
-    rows = [f"{name} {url}" for name, url in list(links)[:5] if name and url]
-    return "▶ 在线观看\n" + "\n".join(rows) if rows else ""
+    return link_caption(links)
 
 
 def _subject_plain(
@@ -787,8 +785,6 @@ def _subject_plain(
     if summary:
         lines.append("")
         lines.append(clip(flatten(summary), 220))
-    if subject.url:
-        lines.append(subject.url)
     caption = _watch_caption(watch_links)
     if caption:
         lines.extend(("", caption))

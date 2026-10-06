@@ -28,6 +28,7 @@ from astrbot.api import logger
 
 from ..activity import ActivityLog
 from ..config import NexusConfig
+from ..links import without_links
 from . import raster as raster_backend
 from .raster import RasterCard, card_from_text
 from .themes import Theme, resolve_theme
@@ -82,7 +83,7 @@ class CardRequest:
             return self.raster
         return card_from_text(
             self.title or "番剧中枢",
-            self.plain,
+            without_links(self.plain),
             eyebrow=self.eyebrow,
             subtitle=self.subtitle,
             chips=self.chips,
@@ -233,7 +234,7 @@ class CardEngine:
         renderer = getattr(self._star, "text_to_image", None)
         if renderer is None or not request.plain:
             return None
-        url = await renderer(request.plain, return_url=True)
+        url = await renderer(without_links(request.plain), return_url=True)
         if not url:
             return None
         return RenderedCard(text=request.plain, image_url=str(url), backend="t2i")

@@ -166,6 +166,7 @@ class NexusConfig:
     card_theme: str = "midnight"
     card_renderer: str = "auto"
     card_width: int = 860
+    notify_character_limit: int = 3
     # 网络
     bangumi_access_token: str = ""
     user_agent: str = DEFAULT_USER_AGENT
@@ -304,6 +305,7 @@ def load_config(raw: Mapping[str, Any] | Any, *, themes: tuple[str, ...] = ()) -
         card_theme=theme("card_theme", "midnight"),
         card_renderer=_as_choice(_get(raw, "card_renderer", "auto"), RENDERERS, "auto"),
         card_width=_as_int(_get(raw, "card_width", 860), 860, low=640, high=1400),
+        notify_character_limit=_as_int(_get(raw, "notify_character_limit", 3), 3, low=0, high=6),
         bangumi_access_token=_as_str(_get(raw, "bangumi_access_token", "")),
         user_agent=_as_str(_get(raw, "user_agent", ""), DEFAULT_USER_AGENT),
         proxy=_as_str(_get(raw, "proxy", "")),

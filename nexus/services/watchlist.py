@@ -16,6 +16,7 @@ import time
 from collections.abc import Sequence
 
 from ..constants import MAX_WATCHLIST_PER_SESSION, WATCH_STATUS_CN
+from ..links import append_caption, link_caption
 from ..models import MatchResult, Subject, WatchItem
 from ..render import build_notice_card, build_watchlist_card
 from ..titles import MATCH_THRESHOLD, similarity
@@ -140,8 +141,11 @@ class WatchlistService:
             stamp="WATCH",
         )
         plain = "\n".join([f"已加入追番表：{item.title}", *lines[1:]])
+        caption = link_caption(deps.matcher.all_links(match)) if conf.show_watch_text else ""
+        plain = append_caption(plain, caption)
         return Reply(
             text=plain,
+            caption=caption,
             card=make_card(
                 html,
                 plain=plain,

@@ -57,7 +57,8 @@ AstrBot 会自动读取 `requirements.txt` 安装：
 | `card_theme` | string | `midnight` | 卡片默认主题。所有卡片（日历 / 条目 / 追番 / 更新 / 抽番 / 帮助）共用这套配色，用 `/番剧中枢 樱绯` 临时预览，或用 `/sub_profile set 樱绯` 保存到当前会话。<br>可选：`midnight`、`aurora`、`sakura`、`blueprint`、`paper`、`sunset` |
 | `card_renderer` | string | `auto` | 卡片渲染方式。auto = AstrBot 无头浏览器 → Pillow 本地绘制 → t2i 文字转图 → 纯文本，逐级兜底；选 text 表示永远只发文字。<br>可选：`auto`、`html`、`raster`、`t2i`、`text` |
 | `card_width` | int | `860` | 卡片渲染宽度（像素）。760~1200。太窄会挤，太宽在手机上要缩放。 |
-| `show_watch_text` | bool | 开 | 卡片附带可点击的在线观看链接。卡片是图片，图里的链接点不动；开启后会在卡片下面再发一小段纯文本链接，方便直接点开。关掉则只发图。 |
+| `notify_character_limit` | int | `3` | 推送卡片的主角人数上限，可填 0~6；0 关闭角色区，不影响简介和制作信息。仅显示 Bangumi 标为主角的人物，资料缺失自动略过。 |
+| `show_watch_text` | bool | 开 | 在卡片外附上可点击的观看入口、Bangumi 条目及资源详情。适用于查番、加入追番、抽番和更新通知；图片内不显示网址。关闭后不自动附带链接，仍可用 /在线观看 主动查询。 |
 
 ## 网络与缓存
 

@@ -32,6 +32,10 @@
       "description": "Card width (pixels)",
       "hint": "760-1200. Too narrow feels cramped, too wide needs zooming on phones."
     },
+    "notify_character_limit": {
+      "description": "Main characters per notification card",
+      "hint": "Single-series RSS and Webhook cards include a synopsis, core staff and main character introductions from Bangumi. Default 3, range 0-6. Set 0 to hide characters without hiding the synopsis or staff. Missing data is omitted."
+    },
     "bangumi_access_token": {
       "description": "Bangumi access token",
       "hint": "Optional: read-only endpoints work without it. Generating one at https://next.bgm.tv/demo/access-token raises your quota and reduces 429 errors."
@@ -79,8 +83,8 @@
       "hint": "Replies longer than 200 characters or containing several lines are sent as an image instead, to avoid flooding the chat."
     },
     "show_watch_text": {
-      "description": "Append a tappable watch link under cards",
-      "hint": "Cards are images, so links drawn inside them are not clickable. When on, a short plain-text link is sent right after the card; turn it off to send the image only."
+      "description": "Append text links",
+      "hint": "Append clickable watch, Bangumi and resource links outside cards for queries, watchlist additions, gacha and update notifications. Images contain no URLs. Disable automatic links or use /在线观看 to request them explicitly."
     },
     "push_enabled": {
       "description": "Enable the daily broadcast",

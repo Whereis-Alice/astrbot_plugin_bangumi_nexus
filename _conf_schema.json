@@ -21,6 +21,12 @@
     "hint": "760~1200。太窄会挤，太宽在手机上要缩放。",
     "default": 860
   },
+  "notify_character_limit": {
+    "description": "推送卡片主角人数上限",
+    "type": "int",
+    "hint": "RSS 单番和 Webhook 通知附带作品简介、制作信息和主角介绍。这里只显示 Bangumi 标为主角的人物，默认最多 3 人；可填 0~6，0 关闭角色区但保留简介和制作信息。资料缺失时自动略过。",
+    "default": 3
+  },
   "bangumi_access_token": {
     "description": "Bangumi Access Token",
     "type": "string",
@@ -93,9 +99,9 @@
     "default": true
   },
   "show_watch_text": {
-    "description": "卡片附带可点击的在线观看链接",
+    "description": "附带文本链接",
     "type": "bool",
-    "hint": "卡片是图片，图里的链接点不动。开启后会在卡片下面再发一小段纯文本链接，方便直接点开。关掉则只发图。",
+    "hint": "在卡片外附上可点击的观看入口、Bangumi 条目及资源详情。适用于查番、加入追番、抽番和更新通知；图片内不显示网址。关闭后不自动附带链接，仍可用 /在线观看 主动查询。",
     "default": true
   },
   "push_enabled": {

@@ -14,13 +14,14 @@ Licensed under the GNU Affero General Public License v3.0 or later.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Mapping
 from typing import Any
 
 from ..constants import BANGUMI_API, BANGUMI_SITE
 from ..http import FetchError, HttpClient
-from ..models import CalendarDay, Episode, Subject
+from ..models import CalendarDay, CharacterProfile, Episode, Subject
 
 #: Bangumi 的 type 常量。
 TYPE_BOOK, TYPE_ANIME, TYPE_MUSIC, TYPE_GAME, TYPE_REAL = 1, 2, 3, 4, 6
@@ -371,6 +372,75 @@ class BangumiSource:
         except FetchError:
             return (), ""
         return cast_from_characters(raw, limit=limit)
+
+    async def main_characters(
+        self, subject_id: int, *, limit: int = 3
+    ) -> tuple[CharacterProfile, ...]:
+        """只取主角，先筛选再限人数；每个角色详情独立超时，不拖住通知。"""
+        limit = max(0, min(6, limit))
+        if not limit:
+            return ()
+        try:
+            raw = await asyncio.wait_for(
+                self._http.fetch_json(
+                    f"{BANGUMI_API}/v0/subjects/{int(subject_id)}/characters",
+                    headers=self._headers(),
+                    cache_key=f"bgm:chars:{subject_id}",
+                    ttl=6 * 3600,
+                ),
+                timeout=2,
+            )
+        except (FetchError, TimeoutError):
+            return ()
+        selected = []
+        seen: set[int] = set()
+        for item in raw if isinstance(raw, list) else ():
+            if not isinstance(item, dict) or item.get("relation") != "主角":
+                continue
+            try:
+                ident = int(item.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if ident <= 0 or ident in seen or not item.get("name"):
+                continue
+            seen.add(ident)
+            selected.append(item)
+            if len(selected) >= limit:
+                break
+
+        async def profile(item: dict) -> CharacterProfile:
+            ident = int(item["id"])
+            detail = {}
+            try:
+                raw_detail = await asyncio.wait_for(
+                    self._http.fetch_json(
+                        f"{BANGUMI_API}/v0/characters/{ident}",
+                        headers=self._headers(),
+                        cache_key=f"bgm:character:{ident}",
+                        ttl=6 * 3600,
+                    ),
+                    timeout=2,
+                )
+                if isinstance(raw_detail, dict):
+                    detail = raw_detail
+            except (FetchError, TimeoutError):
+                pass  # 至少保留名字和本作声优，不能因为一个人物 404 丢掉整组
+            names = _infobox(detail.get("infobox"))
+            voice = " / ".join(
+                dict.fromkeys(
+                    str(actor["name"])
+                    for actor in (item.get("actors") or ())
+                    if isinstance(actor, dict) and actor.get("name")
+                )
+            )
+            return CharacterProfile(
+                id=ident,
+                name=names.get("简体中文名") or str(item["name"]),
+                summary=str(detail.get("summary") or ""),
+                voice=voice,
+            )
+
+        return tuple(await asyncio.gather(*(profile(item) for item in selected)))
 
     async def episodes(self, subject_id: int, *, limit: int = 100) -> list[Episode]:
         """正片分集（type=0）。

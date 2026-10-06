@@ -24,6 +24,7 @@ from ..models import (
     Episode,
     FeedItem,
     MatchResult,
+    NoticeDetails,
     SeasonEntry,
     Subject,
     WatchItem,
@@ -203,14 +204,6 @@ body{width:__WIDTH__px;font-family:var(--font-body);-webkit-font-smoothing:antia
 .kv dt{color:var(--faint);white-space:nowrap}
 .kv dd{color:var(--text);word-break:break-word}
 
-/* ---------- links ---------- */
-.links{display:flex;flex-wrap:wrap;gap:8px}
-.link{display:flex;flex-direction:column;gap:2px;padding:9px 13px;border-radius:12px;max-width:100%;
-  border:1px solid var(--border);background:var(--surface-alt)}
-.link b{font-size:13px;color:var(--text);font-weight:600}
-.link span{font-family:var(--font-mono);font-size:11px;color:var(--faint);
-  word-break:break-all;max-width:340px}
-
 /* ---------- calendar ---------- */
 .week{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px}
 .day{padding:13px;border-radius:16px;border:1px solid var(--border);background:var(--surface-alt)}
@@ -269,7 +262,7 @@ body{width:__WIDTH__px;font-family:var(--font-body);-webkit-font-smoothing:antia
 
 _GLASS_CSS = """
 .sheet{backdrop-filter:blur(22px) saturate(150%)}
-.tile,.day,.cat,.stat,.link,.row{backdrop-filter:blur(10px)}
+.tile,.day,.cat,.stat,.row{backdrop-filter:blur(10px)}
 """
 
 
@@ -435,15 +428,6 @@ def _merge_staff(
     have = {key for key, _ in merged}
     merged.extend(pair for pair in _dedupe_facts(fallback) if pair[0] not in have)
     return merged[: max(1, limit)]
-
-
-def _links(items: Sequence[tuple[str, str]]) -> str:
-    cards = [
-        f'<div class="link"><b>{esc(name)}</b><span>{esc(url)}</span></div>'
-        for name, url in items
-        if str(url or "").strip()
-    ]
-    return f'<div class="links">{"".join(cards)}</div>' if cards else ""
 
 
 def _rows(items: Sequence[tuple[str, str, str, str]]) -> str:
@@ -767,7 +751,6 @@ def build_subject_card(
     width: int = CARD_WIDTH,
     cover: str = "",
     next_air: str = "",
-    watch_links: Sequence[tuple[str, str]] = (),
     summary_override: str = "",
     staff: Sequence[tuple[str, str]] = (),
     cast: Sequence[tuple[str, str]] = (),
@@ -829,13 +812,6 @@ def build_subject_card(
         facts.append(("放送", f"{subject.weekday_label} {subject.air_date}".strip()))
         if subject.eps:
             facts.append(("话数", f"{subject.eps} 话"))
-        facts.append(("Bangumi", subject.url or f"https://bgm.tv/subject/{subject.id}"))
-    if match.data_item and match.data_item.official_site:
-        facts.append(("官网", match.data_item.official_site))
-    elif subject and subject.infobox.get("官方网站"):
-        facts.append(("官网", subject.infobox["官方网站"]))
-    if match.moegirl:
-        facts.append(("萌娘百科", match.moegirl.url))
     intro += '<div class="tile-main">' + _kv(_dedupe_facts(facts))
     summary = summary_override or (subject.summary if subject else "")
     if summary:
@@ -878,9 +854,6 @@ def build_subject_card(
 
     if subject and subject.tags:
         blocks.append(_block("标签", _chips(subject.tags[:14]), hint="按热度"))
-
-    if watch_links:
-        blocks.append(_block("在线观看", _links(list(watch_links)[:8]), hint="正版优先"))
 
     body = f'<div class="body">{"".join(blocks)}</div>'
     footer = _footer(
@@ -1077,6 +1050,50 @@ def build_watchlist_card(
 # ---------------------------------------------------------------------------
 
 
+def _notice_details(details: NoticeDetails | None, cover: str, title: str) -> str:
+    """RSS / Webhook 共用资料区；缺失栏目不留空壳。"""
+    details = details or NoticeDetails()
+    blocks = []
+    if details.summary or cover:
+        content = (
+            '<div class="tile plain">'
+            + (_thumb(cover, title, size="lg") if cover else "")
+            + (
+                f'<div class="tile-main"><div class="para">{esc(details.summary)}</div></div>'
+                if details.summary
+                else ""
+            )
+            + "</div>"
+        )
+        blocks.append(_block("作品简介" if details.summary else "封面", content))
+    if details.staff:
+        blocks.append(_block("制作信息", _kv(details.staff)))
+    if details.characters:
+        characters = []
+        for character in details.characters:
+            voice = (
+                f'<div class="tile-alt">CV · {esc(character.voice)}</div>'
+                if character.voice
+                else ""
+            )
+            summary = (
+                f'<div class="tile-note">{esc(character.summary)}</div>'
+                if character.summary
+                else ""
+            )
+            characters.append(
+                f'<div class="tile"><div class="tile-main"><div class="tile-title">{esc(character.name)}</div>{voice}{summary}</div></div>'
+            )
+        blocks.append(
+            _block(
+                "主角介绍",
+                '<div class="grid c1">' + "".join(characters) + "</div>",
+                hint=f"{len(characters)} 位 · Bangumi",
+            )
+        )
+    return "".join(blocks)
+
+
 def build_feed_card(
     theme: Theme | str,
     source: str,
@@ -1086,6 +1103,7 @@ def build_feed_card(
     subtitle: str = "",
     cover: str = "",
     persona_text: str = "",
+    details: NoticeDetails | None = None,
     version: str = "",
 ) -> str:
     """RSS 更新卡。「persona_text」 是人格转述，会作为卡片开头的一段话出现。"""
@@ -1100,16 +1118,10 @@ def build_feed_card(
         # 不标「由人格生成」：这张卡的播报位只可能是人格转述，标注是纯噪声，
         # 兜底文案上线后还会变成假话。
         blocks.append(_block("播报", f'<div class="para"><em>{esc(persona_text)}</em></div>'))
-    if cover:
-        blocks.append(
-            _block(
-                "封面",
-                '<div class="tile plain">' + _thumb(cover, source, size="lg") + "</div>",
-            )
-        )
     blocks.append(
         _block("更新条目", _rows(rows) or _empty("这次没有新条目"), hint=f"{len(items)} 条")
     )
+    blocks.append(_notice_details(details, cover, source))
     hero = _hero(
         eyebrow="FEED UPDATE",
         title=clip(source, 34) or "订阅更新",
@@ -1186,9 +1198,9 @@ def build_notice_card(
     lines: Sequence[str],
     subtitle: str = "",
     persona_text: str = "",
+    details: NoticeDetails | None = None,
     cover: str = "",
     chips: Sequence[str] = (),
-    link: str = "",
     width: int = CARD_WIDTH,
     stamp: str = "NOTICE",
     version: str = "",
@@ -1199,15 +1211,10 @@ def build_notice_card(
     blocks = []
     if persona_text:
         blocks.append(_block("播报", f'<div class="para"><em>{esc(persona_text)}</em></div>'))
-    if cover:
-        blocks.append(
-            _block("封面", '<div class="tile plain">' + _thumb(cover, title, size="lg") + "</div>")
-        )
     detail = "".join(f'<div class="para">{esc(line)}</div>' for line in lines if str(line).strip())
     if detail:
         blocks.append(_block("详情", detail))
-    if link:
-        blocks.append(_block("链接", _links([("打开", link)])))
+    blocks.append(_notice_details(details, cover, title))
     hero = _hero(
         eyebrow=eyebrow,
         title=clip(title, 40),
@@ -1233,7 +1240,6 @@ def build_gacha_card(
     cover: str = "",
     reason: str = "",
     pool_size: int = 0,
-    watch_links: Sequence[tuple[str, str]] = (),
     version: str = "",
 ) -> str:
     """抽番卡。信息比详情卡少、封面比详情卡大，主打「一眼决定看不看」。"""
@@ -1273,8 +1279,6 @@ def build_gacha_card(
     summary = clip(flatten(subject.summary if subject else ""), 260)
     if summary:
         blocks.append(_block("简介", f'<div class="para">{esc(summary)}</div>'))
-    if watch_links:
-        blocks.append(_block("去哪看", _links(list(watch_links)[:4])))
     body = f'<div class="body">{"".join(blocks)}</div>'
     footer = _footer("番剧中枢", "再抽一次就再发一遍指令", (version,) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="GACHA"))

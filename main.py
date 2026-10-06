@@ -42,6 +42,7 @@ from .nexus.constants import (
     REPO_URL,
 )
 from .nexus.http import HttpClient
+from .nexus.links import URL_RE
 from .nexus.render import (
     HELP_CARD_WIDTH,
     CardEngine,
@@ -509,7 +510,12 @@ class BangumiNexusPlugin(Star):
         body = "\n\n".join(part for part in (str(text or "").strip(), tail) if part)
         if not body:
             return []
-        if RAW_NOTE not in reply.notes and conf.long_reply_as_card and is_long_reply(body):
+        if (
+            RAW_NOTE not in reply.notes
+            and conf.long_reply_as_card
+            and is_long_reply(body)
+            and not URL_RE.search(body)
+        ):
             image = await self._text_image(body)
             if image is not None:
                 return [image]

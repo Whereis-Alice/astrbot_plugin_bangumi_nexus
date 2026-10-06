@@ -157,6 +157,7 @@ CONF_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "card_theme",
             "card_renderer",
             "card_width",
+            "notify_character_limit",
             "show_watch_text",
             "long_reply_as_card",
         ),

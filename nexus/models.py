@@ -380,6 +380,43 @@ class MatchResult:
 
 
 @dataclass(frozen=True)
+class CharacterProfile:
+    """角色资料；同一声优的不同角色仍是不同的人物。"""
+
+    id: int
+    name: str
+    summary: str = ""
+    voice: str = ""
+
+
+@dataclass(frozen=True)
+class NoticeDetails:
+    """已裁剪的单番通知补充资料；HTML、文字和栅格回退共用。"""
+
+    summary: str = ""
+    staff: tuple[tuple[str, str], ...] = ()
+    characters: tuple[CharacterProfile, ...] = ()
+    cover: str = ""
+
+    def plain_text(self) -> str:
+        blocks = []
+        if self.summary:
+            blocks.append("作品简介\n" + self.summary)
+        if self.staff:
+            blocks.append("制作信息\n" + "\n".join(f"{k}：{v}" for k, v in self.staff))
+        if self.characters:
+            rows = []
+            for character in self.characters:
+                voice = f" · CV {character.voice}" if character.voice else ""
+                rows.append(
+                    f"{character.name}{voice}"
+                    + (f"\n{character.summary}" if character.summary else "")
+                )
+            blocks.append("主角介绍\n" + "\n".join(rows))
+        return "\n\n".join(blocks)
+
+
+@dataclass(frozen=True)
 class Notification:
     """要发出去的一条通知。渲染与人格转述都以它为输入。"""
 

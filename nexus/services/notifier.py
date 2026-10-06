@@ -17,10 +17,12 @@ from astrbot.api.message_components import Image, Plain
 from astrbot.core.message.message_event_result import MessageChain
 
 from ..episode_numbers import episode_claims_match, episode_number
-from ..models import FeedItem, Notification
+from ..links import link_caption, link_label
+from ..models import FeedItem, NoticeDetails, Notification
 from ..platforms import Instances, describe, live_platforms, pick_platform_id, remap_umo
 from ..render import build_feed_card, build_notice_card
 from .base import Deps, Reply, cover_uri, llm_available, llm_text, make_card, style_for
+from .notice_details import can_enrich, load_notice_details, subject_id_of
 
 DEDUP_CAPACITY = 500
 #: 人格转述失败后重试前的等待秒数。压垮人格链路的多是瞬时故障 —— LLM 网关
@@ -82,10 +84,14 @@ class Notifier:
             return 0
 
         gate = asyncio.Semaphore(max(1, self._deps.conf.send_concurrency))
+        details = await load_notice_details(self._deps, notification)
+        caption = await self._caption(notification)
 
         async def one(session: str) -> bool:
             async with gate:
-                return await self.send(notification, session, persona=persona)
+                return await self.send(
+                    notification, session, persona=persona, caption=caption, details=details
+                )
 
         results = await asyncio.gather(*(one(session) for session in sessions))
         return sum(1 for ok in results if ok)
@@ -96,9 +102,13 @@ class Notifier:
         umo: str,
         *,
         persona: bool | None = None,
+        caption: str | None = None,
+        details: NoticeDetails | None = None,
     ) -> bool:
         """向单个会话推送，失败按指数退避重试。"""
-        chain = await self.build_chain(notification, umo, persona=persona)
+        chain = await self.build_chain(
+            notification, umo, persona=persona, caption=caption, details=details
+        )
         return await self.deliver(chain, umo)
 
     async def send_reply(
@@ -132,6 +142,8 @@ class Notifier:
                 if card.image_path
                 else Image.fromURL(card.image_url)
             )
+            if reply.caption:
+                components.append(Plain("\n" + reply.caption))
         else:
             text = (card.text if card is not None and card.text else reply.text).strip()
             if text:
@@ -174,14 +186,20 @@ class Notifier:
         umo: str,
         *,
         persona: bool | None = None,
+        caption: str | None = None,
+        details: NoticeDetails | None = None,
     ) -> MessageChain:
         """通知 → 消息链（口播文字 + 卡片图）。"""
         deps = self._deps
         conf = deps.conf
         use_persona = conf.persona_reply_enabled if persona is None else persona
         spoken = await self._persona_line(notification, umo) if use_persona else ""
+        if details is None:
+            details = await load_notice_details(deps, notification)
+        if caption is None:
+            caption = await self._caption(notification)
 
-        card = await self._render(notification, umo, spoken)
+        card = await self._render(notification, umo, spoken, details)
         components: list = []
         if spoken:
             components.append(Plain(spoken))
@@ -193,9 +211,40 @@ class Notifier:
             )
         elif card is not None and card.text:
             components.append(Plain(("\n" if spoken else "") + card.text))
-        elif not spoken:
-            components.append(Plain(notification.plain_text()))
+        else:
+            components.append(
+                Plain("\n\n".join(filter(None, (notification.plain_text(), details.plain_text()))))
+            )
+        if caption:
+            components.append(Plain("\n" + caption))
         return MessageChain(chain=components)
+
+    async def _caption(self, notification: Notification) -> str:
+        """主动通知也附带可点击链接；没有条目身份的宽 RSS 只给原资源页。"""
+        deps = self._deps
+        if not deps.conf.show_watch_text:
+            return ""
+        links = []
+        if notification.link:
+            links.append((link_label(notification.link), notification.link))
+        for item in _feed_items(notification.payload)[:5]:
+            if item.link:
+                links.append(("资源详情", item.link))
+        try:
+            subject_id = subject_id_of(notification)
+            # RSS 允许订阅任意资讯源；不能拿源名字猜成一部动画。
+            lookup = can_enrich(notification)
+            if deps.conf.enable_cross_match and lookup:
+                links.extend(
+                    await asyncio.wait_for(
+                        deps.matcher.notification_links(subject_id, notification.title), timeout=8
+                    )
+                )
+            elif subject_id > 0:
+                links.append(("Bangumi 条目", f"https://bgm.tv/subject/{subject_id}"))
+        except Exception as error:  # noqa: BLE001 - 链接是补充，不能阻止更新通知
+            deps.activity.warn("notify", f"观看入口查询未完成：{type(error).__name__}")
+        return link_caption(links)
 
     # ------------------------------------------------------------------
     # 人格口播
@@ -296,11 +345,13 @@ class Notifier:
     # ------------------------------------------------------------------
     # 卡片
     # ------------------------------------------------------------------
-    async def _render(self, notification: Notification, umo: str, spoken: str):
+    async def _render(
+        self, notification: Notification, umo: str, spoken: str, details: NoticeDetails
+    ):
         deps = self._deps
         conf = deps.conf
         theme, _ = await style_for(deps, umo)
-        cover = await cover_uri(deps, notification.cover)
+        cover = await cover_uri(deps, notification.cover or details.cover)
         items = _feed_items(notification.payload)
         if items:
             html = build_feed_card(
@@ -311,6 +362,7 @@ class Notifier:
                 subtitle=notification.subtitle,
                 cover=cover,
                 persona_text=spoken,
+                details=details,
             )
         else:
             html = build_notice_card(
@@ -320,14 +372,14 @@ class Notifier:
                 lines=notification.lines,
                 subtitle=notification.subtitle,
                 persona_text=spoken,
+                details=details,
                 cover=cover,
-                link=notification.link,
                 width=conf.card_width,
                 stamp="ALERT" if notification.kind in ERROR_KINDS else "NOTICE",
             )
         request = make_card(
             html,
-            plain=notification.plain_text(),
+            plain="\n\n".join(filter(None, (notification.plain_text(), details.plain_text()))),
             title=notification.title,
             eyebrow=KIND_EYEBROW.get(notification.kind, "NOTICE"),
             subtitle=notification.subtitle,

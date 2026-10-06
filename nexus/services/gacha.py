@@ -18,6 +18,7 @@ import random
 from collections import deque
 from collections.abc import Sequence
 
+from ..links import append_caption, link_caption
 from ..models import MatchResult, SeasonEntry, Subject
 from ..render import build_gacha_card
 from ..titles import season_code, season_label
@@ -80,13 +81,14 @@ class GachaService:
             cover=cover,
             reason=reason,
             pool_size=pool_size,
-            watch_links=deps.matcher.watch_links(match),
         )
         self._draws += 1
         deps.activity.info("gacha", f"抽到 {title}")
-        plain = _plain(match, reason, pool_size)
+        caption = link_caption(deps.matcher.all_links(match)) if conf.show_watch_text else ""
+        plain = append_caption(_plain(match, reason, pool_size), caption)
         return Reply(
             text=plain,
+            caption=caption,
             card=make_card(
                 html,
                 plain=plain,
@@ -226,8 +228,6 @@ def _plain(match: MatchResult, reason: str, pool_size: int) -> str:
     if subject is not None:
         meta = [subject.type_label, subject.score_label, subject.weekday_label]
         lines.append(" · ".join(part for part in meta if part))
-        if subject.url:
-            lines.append(subject.url)
     season = match.season
     if season is not None:
         if season.studio:

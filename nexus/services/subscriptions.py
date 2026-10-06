@@ -31,6 +31,7 @@ from ..constants import (
     PICK_SESSION_SECONDS,
 )
 from ..dedup import dedupe_releases, episode_number, revision, series_key
+from ..links import append_caption, link_caption
 from ..models import FeedItem, MatchResult, MikanGroup, Notification, Subscription
 from ..render import build_feed_card, build_notice_card, build_picker_card, theme_keys
 from ..sources.rss import dmhy_feed, mikan_group_feed, normalize_feed_url, rsshub_feed
@@ -340,7 +341,7 @@ class SubscriptionService:
             sub.id, last_checked=time.time() if ok else 0.0, error="" if ok else detail
         )
 
-        lines = [f"名称：{sub.name}", f"地址：{url}"]
+        lines = [f"名称：{sub.name}"]
         if ok:
             lines.append(f"探测：正常，当前 {count} 条")
             lines.append(f"最新：{detail}")
@@ -350,7 +351,7 @@ class SubscriptionService:
             lines.append(f"探测：失败（{detail}）")
             lines.append("订阅仍然建好了，下一轮会自动重试")
         if subject_id:
-            lines.append(f"关联条目：bgm.tv/subject/{subject_id}")
+            lines.append(f"关联条目：Bangumi ID {subject_id}")
         if excludes:
             head = "、".join(excludes[:6])
             tail = f" 等 {len(excludes)} 项" if len(excludes) > 6 else ""
@@ -530,7 +531,6 @@ class SubscriptionService:
         if sub is None:
             return Reply.plain(f"没找到「{name.strip()}」这条订阅。")
         lines = [
-            f"地址：{sub.url}",
             f"状态：{'启用' if sub.enabled else '暂停'}",
             f"上次检查：{_stamp(sub.last_checked) or '尚未检查'}",
             f"最近条目：{sub.last_item or '—'}",
@@ -882,6 +882,7 @@ class SubscriptionService:
             payload={
                 "feed_items": limited,
                 "subscription": sub.name,
+                "subject_id": sub.subject_id,
                 "hidden": hidden,
                 "merged": merged,
                 "carried": carried,
@@ -1069,13 +1070,15 @@ class SubscriptionService:
             lines=list(lines),
             subtitle=subtitle,
             cover=cover_data,
-            link=link,
             width=conf.card_width,
             stamp=stamp,
         )
         plain = "\n".join([title, *(line for line in lines if str(line).strip())])
+        caption = link_caption([("订阅源", link)]) if conf.show_watch_text else ""
+        plain = append_caption(plain, caption)
         return Reply(
             text=plain,
+            caption=caption,
             card=make_card(
                 html,
                 plain=plain,

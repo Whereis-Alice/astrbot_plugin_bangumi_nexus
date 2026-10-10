@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="assets/logo.png" width="128" alt="番剧中枢 Logo" />
+<img src="assets/logo.png" width="128" alt="我的番剧 Logo" />
 
-# 番剧中枢 · Bangumi Nexus
+# 我的番剧 · Bangumi Nexus
 
 在 AstrBot 里查番、记进度、收更新通知。
 
@@ -22,7 +22,7 @@
 
 ## 安装
 
-在 AstrBot 管理面板的插件市场搜索 **番剧中枢** 并安装。
+在 AstrBot 管理面板的插件市场搜索 **我的番剧** 并安装。
 也可以选择「从链接安装」，填入：
 
 ```text

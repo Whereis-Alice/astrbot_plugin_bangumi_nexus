@@ -13,7 +13,7 @@ from pathlib import Path
 
 PLUGIN_NAME = "astrbot_plugin_bangumi_nexus"
 PLUGIN_ID = "bangumi_nexus"
-PLUGIN_DISPLAY_NAME = "番剧中枢"
+PLUGIN_DISPLAY_NAME = "我的番剧"
 PLUGIN_BRAND = "Bangumi Nexus"
 PAGE_NAME = "nexus"
 LOG_PREFIX = f"[{PLUGIN_DISPLAY_NAME}]"

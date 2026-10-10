@@ -46,7 +46,7 @@ AUTH_LABEL = {"api_key": "API Key", "password": "账号密码", "none": "未设�
 
 
 class AniRssSyncService:
-    """ani-rss → 番剧中枢 的单向同步。"""
+    """ani-rss → 我的番剧 的单向同步。"""
 
     def __init__(self, deps: Deps, *, notifier: Any = None) -> None:
         self._deps = deps

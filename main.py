@@ -1,4 +1,4 @@
-"""番剧中枢 · Bangumi Nexus —— 插件入口。
+"""我的番剧 · Bangumi Nexus —— 插件入口。
 
 这个文件刻意保持「薄」：真正的活儿全在 「nexus/」 包里。这里只做四件事
 
@@ -95,7 +95,7 @@ BUSY_PROBE = "\u2026 正在体检各数据源"
 
 
 class BangumiNexusPlugin(Star):
-    """番剧中枢：聊天指令 + 定时播报 + Webhook + Dashboard 工作台。"""
+    """我的番剧：聊天指令 + 定时播报 + Webhook + Dashboard 工作台。"""
 
     def __init__(
         self,

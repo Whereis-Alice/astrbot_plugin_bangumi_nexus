@@ -82,7 +82,7 @@ class CardRequest:
         if self.raster is not None:
             return self.raster
         return card_from_text(
-            self.title or "番剧中枢",
+            self.title or "我的番剧",
             without_links(self.plain),
             eyebrow=self.eyebrow,
             subtitle=self.subtitle,

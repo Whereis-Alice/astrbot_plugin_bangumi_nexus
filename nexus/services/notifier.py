@@ -174,7 +174,7 @@ class Notifier:
                 if attempt >= attempts:
                     self._failed += 1
                     deps.activity.error("notify", f"推送到 {umo} 失败：{error}")
-                    logger.warning(f"番剧中枢推送失败 umo={umo}: {error}")
+                    logger.warning(f"我的番剧推送失败 umo={umo}: {error}")
                     return False
                 # 指数退避：平台限流或网络抖动时，越往后等越久
                 await asyncio.sleep(delay * (2 ** (attempt - 1)))
@@ -495,7 +495,7 @@ class Notifier:
             f"平台标识 「{source}」 不是启用中的适配器实例，已改用 「{target}」"
             f"（当前实例：{describe(instances)}）",
         )
-        logger.info(f"番剧中枢平台标识重映射 {source} -> {target}")
+        logger.info(f"我的番剧平台标识重映射 {source} -> {target}")
 
     def stats(self) -> dict[str, int]:
         return {

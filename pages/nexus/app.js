@@ -1,5 +1,5 @@
 /**
- * 番剧中枢 · Bangumi Nexus — Dashboard 插件页前端
+ * 我的番剧 · Bangumi Nexus — Dashboard 插件页前端
  *
  * 设计约定（改动前请先读完）：
  * 1. 所有后端交互只走 window.AstrBotPluginPage 这个 bridge，
@@ -2015,7 +2015,7 @@ RENDERERS.anirss = () => {
       kv([
         ["地址", data.base || "（未设置）"],
         ["校验 HTTPS 证书", data.verify_tls === false ? "已关闭（只在自签证书时这么设）" : "开启"],
-        ["同步方向", "ani-rss → 番剧中枢（只读）"],
+        ["同步方向", "ani-rss → 我的番剧（只读）"],
       ]) +
       (data.configured
         ? ""

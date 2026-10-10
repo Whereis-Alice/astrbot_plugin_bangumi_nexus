@@ -29,10 +29,10 @@
 
 ## 管理面板
 
-装好插件后，Dashboard 侧边栏会多出一个「番剧中枢」页面。10 个视图分工如下：
+装好插件后，Dashboard 侧边栏会多出一个「我的番剧」页面。10 个视图分工如下：
 
 <p align="center">
-  <img src="../assets/webui/overview.webp" alt="番剧中枢 管理面板 · 概览" width="860">
+  <img src="../assets/webui/overview.webp" alt="我的番剧 管理面板 · 概览" width="860">
 </p>
 
 | 视图 | 你能在这里做什么 |
@@ -67,7 +67,7 @@
 指令视图会把 42 条指令按 6 个分类整张摊开，别名和权限都在表里：
 
 <p align="center">
-  <img src="../assets/webui/commands.webp" alt="番剧中枢 管理面板 · 指令速查" width="820">
+  <img src="../assets/webui/commands.webp" alt="我的番剧 管理面板 · 指令速查" width="820">
 </p>
 
 ## 6 套主题
@@ -76,7 +76,7 @@
 **界面偏好存在后端**，所以换浏览器、换设备打开也是你上次的样子。
 
 <p align="center">
-  <img src="../assets/webui/themes.webp" alt="番剧中枢 管理面板 6 套主题" width="900">
+  <img src="../assets/webui/themes.webp" alt="我的番剧 管理面板 6 套主题" width="900">
 </p>
 
 <p align="center"><sub>从左上到右下：午夜霓虹 · 极光 · 樱绯 · 蓝图 · 素笺 · 落日</sub></p>
@@ -84,7 +84,7 @@
 窄屏会自动折成单列，手机上也能改配置、点一次播报：
 
 <p align="center">
-  <img src="../assets/webui/mobile.webp" alt="番剧中枢 管理面板 移动端" width="300">
+  <img src="../assets/webui/mobile.webp" alt="我的番剧 管理面板 移动端" width="300">
 </p>
 
 ## 渲染与回退

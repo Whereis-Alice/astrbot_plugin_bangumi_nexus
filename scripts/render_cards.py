@@ -323,7 +323,7 @@ def _default_version() -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="渲染番剧中枢的帮助卡与 logo。")
+    parser = argparse.ArgumentParser(description="渲染我的番剧的帮助卡与 logo。")
     parser.add_argument("themes", nargs="*", help="主题 key（默认全部）")
     parser.add_argument("--chromium", default=None, help="Chromium 可执行文件路径")
     parser.add_argument("--prefix", default="/", help="卡片上展示的指令前缀")

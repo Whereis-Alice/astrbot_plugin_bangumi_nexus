@@ -137,7 +137,7 @@ class RasterCard:
     subtitle: str = ""
     chips: tuple[str, ...] = ()
     sections: tuple[Section, ...] = ()
-    footer: str = "番剧中枢 Bangumi Nexus"
+    footer: str = ""
     stats: tuple[tuple[str, str], ...] = ()
     extras: dict[str, object] = field(default_factory=dict)
 
@@ -180,7 +180,7 @@ def card_from_text(
     eyebrow: str = "",
     subtitle: str = "",
     chips: Iterable[str] = (),
-    footer: str = "番剧中枢 Bangumi Nexus",
+    footer: str = "",
 ) -> RasterCard:
     """便捷构造：直接吃「纯文本兜底文案」。"""
 
@@ -352,11 +352,12 @@ def _layout(
                 y += unit(26)
         y += unit(12)
 
-    y += unit(6)
-    ops.append(_Op("footer-rule", y, 1))
-    y += unit(20)
-    ops.append(_Op("footer", y, unit(24), card.footer))
-    y += unit(30)
+    if card.footer:
+        y += unit(6)
+        ops.append(_Op("footer-rule", y, 1))
+        y += unit(20)
+        ops.append(_Op("footer", y, unit(24), card.footer))
+        y += unit(30)
 
     ops.insert(0, _Op("hero-bg", 0, hero_height))
     return ops, y + unit(_PAD)

@@ -395,7 +395,7 @@ class WebhookService:
             f"event={event_episode:g} total={total} unresolved={unresolved}"
         )
         self._deps.activity.info("webhook", diagnostic)
-        logger.info(f"[番剧中枢] {diagnostic}")
+        logger.info(f"[我的番剧] {diagnostic}")
         if marker and kind == "new_episode":
             subtitle = f"{marker} · {subtitle}"
         return Notification(
@@ -586,7 +586,7 @@ class WebhookService:
         """给 WebUI 的「发一条测试通知」按钮用。"""
         notification = Notification(
             kind="test",
-            title="番剧中枢 Webhook 自检",
+            title="我的番剧 Webhook 自检",
             lines=("这是一条测试通知。", "看到这张卡说明 Webhook 到消息平台的链路是通的。"),
             subtitle=KIND_PHRASE["test"],
         )

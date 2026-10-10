@@ -584,7 +584,7 @@ class SubscriptionService:
             umo,
             eyebrow="STATUS",
             title="订阅与推送状态",
-            subtitle="番剧中枢运行情况",
+            subtitle="我的番剧运行情况",
             lines=lines,
         )
 

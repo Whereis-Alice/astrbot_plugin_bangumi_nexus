@@ -444,11 +444,11 @@ def _rows(items: Sequence[tuple[str, str, str, str]]) -> str:
     return f'<div class="rows">{"".join(out)}</div>' if out else ""
 
 
-def _footer(brand: str, note: str, meta: Sequence[str] = ()) -> str:
+def _footer(note: str, meta: Sequence[str] = ()) -> str:
     lines = "<br>".join(esc(line) for line in meta if str(line or "").strip())
     return (
         '<div class="footer">'
-        f'<span class="brand">{esc(brand)} <span>{esc(note)}</span></span>'
+        f'<span class="brand">{esc(note)}</span>'
         f'<span class="meta">{lines}</span>'
         "</div>"
     )
@@ -547,7 +547,7 @@ def build_help_card(
     aliases = sum(len(command.aliases) for category in categories for command in category.commands)
     hero = _hero(
         eyebrow="Bangumi Nexus",
-        title="番剧中枢",
+        title="我的番剧",
         sub="搜番 · 追番 · 订阅 · 播报 —— 八个数据源汇成一张卡",
         chips=_chips(
             (
@@ -584,7 +584,6 @@ def build_help_card(
     )
     body = f'<div class="body">{notice}<div class="board">{column_html}</div></div>'
     footer = _footer(
-        "番剧中枢 Bangumi Nexus",
         footnote or "AGPL-3.0 · 数据来自各站公开接口",
         (f"主题 {resolved.name}", version) if version else (f"主题 {resolved.name}",),
     )
@@ -640,7 +639,7 @@ def build_calendar_card(
         stats=(_stat(total, "TITLES", accent=True), _stat(len(days), "DAYS")),
     )
     body = f'<div class="body"><div class="week">{"".join(cells)}</div></div>'
-    footer = _footer("番剧中枢", "数据来源 bgm.tv", ("每日放送", version) if version else ())
+    footer = _footer("数据来源 bgm.tv", ("每日放送", version) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="CALENDAR"))
 
 
@@ -735,7 +734,7 @@ def build_today_card(
         sub=sub,
         stats=tuple(stats),
     )
-    footer = _footer("番剧中枢", "数据来源 bgm.tv", ("今日放送", version) if version else ())
+    footer = _footer("数据来源 bgm.tv", ("今日放送", version) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="TODAY"))
 
 
@@ -857,7 +856,6 @@ def build_subject_card(
 
     body = f'<div class="body">{"".join(blocks)}</div>'
     footer = _footer(
-        "番剧中枢",
         f"置信度 {match.confidence:.0%}" if match.confidence else "跨源聚合",
         (version,) if version else (),
     )
@@ -914,7 +912,7 @@ def build_search_card(
         sub=f"在 Bangumi 找到 {len(subjects)} 条结果，发送 /bgm <ID> 看详情",
         stats=(_stat(len(subjects), "HITS", accent=True),),
     )
-    footer = _footer("番剧中枢", "数据来源 bgm.tv", ("搜索", version) if version else ())
+    footer = _footer("数据来源 bgm.tv", ("搜索", version) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="SEARCH"))
 
 
@@ -980,7 +978,7 @@ def build_episode_card(
         )
         + "</div>"
     )
-    footer = _footer("番剧中枢", "数据来源 bgm.tv", ("分集", version) if version else ())
+    footer = _footer("数据来源 bgm.tv", ("分集", version) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="EPISODE"))
 
 
@@ -1040,7 +1038,7 @@ def build_watchlist_card(
         ),
     )
     footer = _footer(
-        "番剧中枢", "追番数据保存在本地 SQLite", ("追番表", version) if version else ()
+        "追番数据保存在本地 SQLite", ("追番表", version) if version else ()
     )
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="WATCH"))
 
@@ -1129,7 +1127,7 @@ def build_feed_card(
         stats=(_stat(len(items), "NEW", accent=True),),
     )
     body = f'<div class="body">{"".join(blocks)}</div>'
-    footer = _footer("番剧中枢", "订阅可用 /sub_list 管理", ("RSS", version) if version else ())
+    footer = _footer("订阅可用 /sub_list 管理", ("RSS", version) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="FEED"))
 
 
@@ -1186,7 +1184,7 @@ def build_picker_card(
         small=text_width(title) > 30,
     )
     body = f'<div class="body">{"".join(blocks)}</div>'
-    footer = _footer("番剧中枢", "选完这条列表会自动撤回", (version,) if version else ())
+    footer = _footer("选完这条列表会自动撤回", (version,) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="PICK"))
 
 
@@ -1223,7 +1221,7 @@ def build_notice_card(
         small=text_width(title) > 32,
     )
     body = f'<div class="body">{"".join(blocks) or _empty("没有更多内容")}</div>'
-    footer = _footer("番剧中枢", "Bangumi Nexus", (version,) if version else ())
+    footer = _footer("更新提醒", (version,) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp=stamp))
 
 
@@ -1280,7 +1278,7 @@ def build_gacha_card(
     if summary:
         blocks.append(_block("简介", f'<div class="para">{esc(summary)}</div>'))
     body = f'<div class="body">{"".join(blocks)}</div>'
-    footer = _footer("番剧中枢", "再抽一次就再发一遍指令", (version,) if version else ())
+    footer = _footer("再抽一次就再发一遍指令", (version,) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="GACHA"))
 
 
@@ -1320,7 +1318,7 @@ def build_recommend_card(
         sub="来自 AGE 动漫推荐位",
         stats=(_stat(len(items), "TITLES", accent=True),),
     )
-    footer = _footer("番剧中枢", "数据来源 agedm.io", (version,) if version else ())
+    footer = _footer("数据来源 agedm.io", (version,) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="PICKS"))
 
 
@@ -1378,7 +1376,7 @@ def build_season_card(
             _stat(min(counted, limit), "SHOWN"),
         ),
     )
-    footer = _footer("番剧中枢", "数据来源 yuc.wiki", (version,) if version else ())
+    footer = _footer("数据来源 yuc.wiki", (version,) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="SEASON"))
 
 
@@ -1409,7 +1407,7 @@ def build_diagnose_card(
         stats=(_stat(f"{passed}/{len(results)}", "PASSED", accent=True),),
     )
     body = f'<div class="body">{_block("逐源结果", _rows(rows) or _empty("没有可检查的源"))}</div>'
-    footer = _footer("番剧中枢", "/番剧诊断", (version,) if version else ())
+    footer = _footer("/番剧诊断", (version,) if version else ())
     return _document(resolved, width=width, body=_sheet(hero, body, footer, stamp="CHECK"))
 
 
@@ -1478,7 +1476,7 @@ def build_anirss_card(
         + _block("ani-rss 里的订阅", listing, hint=f"共 {total} 条")
         + "</div>"
     )
-    footer = _footer("番剧中枢", "/anirss", (version,) if version else ())
+    footer = _footer("/anirss", (version,) if version else ())
     return _document(
         resolved,
         width=width,

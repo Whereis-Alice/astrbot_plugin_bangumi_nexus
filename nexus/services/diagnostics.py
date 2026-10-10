@@ -51,7 +51,7 @@ class DiagnosticsService:
             card=make_card(
                 html,
                 plain=plain,
-                title="番剧中枢自检",
+                title="我的番剧自检",
                 eyebrow="DIAGNOSE",
                 subtitle=f"{ok_count}/{len(results)} 项正常",
                 theme=theme,
@@ -297,7 +297,7 @@ def _short(text: str, *, limit: int = 60) -> str:
 
 
 def _diagnose_plain(results: Sequence[tuple[str, bool, str, float]]) -> str:
-    lines = ["番剧中枢自检结果："]
+    lines = ["我的番剧自检结果："]
     for name, ok, note, elapsed in results:
         mark = "正常" if ok else "异常"
         lines.append(f"[{mark}] {name} · {note} · {elapsed:.1f}s")

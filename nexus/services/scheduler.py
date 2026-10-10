@@ -120,7 +120,7 @@ class Scheduler:
             except Exception as error:  # noqa: BLE001 - 循环必须活着
                 self._errors += 1
                 self._deps.activity.error("scheduler", f"调度异常：{error}")
-                logger.warning(f"番剧中枢调度异常：{error}")
+                logger.warning(f"我的番剧调度异常：{error}")
 
     @staticmethod
     async def _sleep_to_next_minute() -> None:

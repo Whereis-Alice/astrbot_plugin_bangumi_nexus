@@ -20,7 +20,7 @@
 
 需要 AstrBot 4.25 或更高的 4.x 版本，兼容范围以 [插件元数据](../metadata.yaml) 为准。
 
-推荐在 AstrBot 管理面板的插件市场搜索「番剧中枢」。也可以用「从链接安装」填入仓库地址：
+推荐在 AstrBot 管理面板的插件市场搜索「我的番剧」。也可以用「从链接安装」填入仓库地址：
 
 ```text
 https://github.com/Whereis-Alice/astrbot_plugin_bangumi_nexus

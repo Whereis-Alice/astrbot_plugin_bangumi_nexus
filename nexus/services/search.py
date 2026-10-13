@@ -476,7 +476,7 @@ class SearchService:
             times=times,
             long_running=long_items,
         )
-        plain = _today_plain(trimmed, limit, extras=extras, times=times)
+        plain = _today_plain(trimmed, limit, total=len(items), extras=extras, times=times)
         return Reply(
             text=plain,
             card=make_card(
@@ -484,7 +484,7 @@ class SearchService:
                 plain=plain,
                 title=f"{day.label}放送",
                 eyebrow="TODAY",
-                subtitle=f"共 {len(items)} 部",
+                subtitle=_today_subtitle(len(items), limit),
                 theme=theme,
                 width=conf.card_width,
             ),
@@ -543,7 +543,7 @@ class SearchService:
             long_running=long_items,
             order_note=_sort_note(conf.push_sort_by, conf.push_sort_order),
         )
-        plain = _today_plain(trimmed, limit, extras=extras, times=times)
+        plain = _today_plain(trimmed, limit, total=len(ordered), extras=extras, times=times)
         return Reply(
             text=plain,
             card=make_card(
@@ -551,7 +551,7 @@ class SearchService:
                 plain=plain,
                 title=f"{day.label}放送",
                 eyebrow="DAILY",
-                subtitle=f"共 {len(ordered)} 部",
+                subtitle=_today_subtitle(len(ordered), limit),
                 theme=theme,
                 width=conf.card_width,
             ),
@@ -804,23 +804,41 @@ def _today_plain(
     day: CalendarDay,
     limit: int,
     *,
+    total: int | None = None,
     extras: Sequence[tuple[Subject, str]] = (),
     times: Mapping[int, str] | None = None,
 ) -> str:
-    """纯文本兜底。渲染失败时用户看到的就是这段，所以卡片有什么它就得有什么。"""
+    """纯文本兜底，同时是每日播报喂给人格转述的素材。
+
+    渲染失败时用户看到的就是这段，所以卡片有什么它就得有什么：卡片主栏只列
+    「limit」 条，这里同样只列这些，并把总数写进首行、把被截掉的部分写在末尾。
+    「total」 是截断前的总数（每日播报的过滤结果可能比卡片能放的更多），
+    不传就退回条目数 —— 只按条目数写的话，人格会照着「共 N 部」念出比实际
+    列出的更多部数，这正是用户抓到的「说九部只列七部」。
+    """
 
     clock = times or {}
-    lines = [f"{day.label}放送（共 {len(day.items)} 部）："]
+    total_shown = len(day.items) if total is None else total
+    omitted = max(0, total_shown - min(len(day.items), limit))
+    lines = [f"{day.label}放送（共 {total_shown} 部）："]
     for item in day.items[:limit]:
         lines.append("· " + _today_line(item, clock.get(item.id, "")))
-    if len(day.items) > limit:
-        lines.append(f"…还有 {len(day.items) - limit} 部")
+    if omitted:
+        lines.append(f"…还有 {omitted} 部未在文字里列出")
     if extras:
         lines.append("")
         lines.append("跨季续播（已核验放送期）：")
         for subject, label in extras:
             lines.append("· " + _today_line(subject, label))
     return "\n".join(lines)
+
+
+def _today_subtitle(total: int, limit: int) -> str:
+    """卡片副标题。截断时说清「共几部、列几部」，不截断就别加废话。"""
+
+    if total > limit:
+        return f"共 {total} 部，展示前 {limit} 部"
+    return f"共 {total} 部"
 
 
 def _today_line(item: Subject, air_time: str) -> str:

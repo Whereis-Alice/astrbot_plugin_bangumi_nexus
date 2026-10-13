@@ -371,18 +371,32 @@ class Scheduler:
 def _facts_of(text: str, *, limit: int = 260) -> str:
     """从播报纯文本里截一段当人格口播的素材。
 
-    整张放送表几十行喂给模型既贵又容易让它开始逐条念，
-    截前几行足够它说出「今天有哪几部」。
+    整张放送表几十行喂给模型既贵又容易让它开始逐条念，所以只截前面几条；但
+    必须整行截：切在半句上，模型会把「· 某番 · 23:00 ·」补完，或者把首行的
+    「共 N 部」当成已经列完的条数念出去。这里额外补一句「只列出前几部」，
+    让口播的条数永远对得上实际列出的条目 —— 用户抓到的「说九部只列七部」
+    就是素材里首行写着总数、底下却只有前几行造成的。
     """
+
     lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
     picked: list[str] = []
     used = 0
-    for line in lines[:8]:
+    truncated = False
+    for index, line in enumerate(lines[:8]):
+        # 首行（标题）永远保留；之后装不下的整行直接丢，绝不切在句子中间。
+        if index and used + len(line) > limit:
+            truncated = True
+            break
         used += len(line)
         picked.append(line)
-        if used >= limit:
-            break
-    return "\n".join(picked)
+    if len(lines) > 8:
+        truncated = True
+    if not truncated:
+        return "\n".join(picked)
+    shown = sum(1 for line in picked if line.startswith("\u00b7"))
+    return "\n".join([*picked, f"（素材到此为止，这里只列出前 {shown} 部）"])
 
 
 __all__ = ["MISFIRE_GRACE_SECONDS", "Scheduler"]

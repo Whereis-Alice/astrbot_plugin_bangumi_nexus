@@ -324,3 +324,29 @@ class Test播报集数校验:
         )
         notifier, _ = _notifier(_Gateway("第1集下好了"), fallback_line=False)
         assert await notifier._persona_line(notice, UMO) == ""
+
+
+class Test播报条数不给模型留空子:
+    """素材里写着「共 9 部」却只列 7 条时，模型必须按 7 条说，不能替总数打包票。"""
+
+    async def test_素材被截断时提示模型只按列出的条数说(self) -> None:
+        gateway = _Gateway("今天有 7 部新番在播。")
+        notifier, _ = _notifier(gateway)
+        facts = (
+            "星期二放送（共 9 部）：\n"
+            "· 甲番 · 7.8分\n"
+            "· 乙番 · 7.5分\n"
+            "（素材到此为止，这里只列出前 7 部）"
+        )
+        spoken = await notifier.speak(facts, UMO)
+        assert spoken == "今天有 7 部新番在播。"
+        prompt = gateway.calls[0]["prompt"]
+        assert "素材只列出了一部分" in prompt
+        assert "素材到此为止，这里只列出前 7 部" in prompt
+
+    async def test_素材完整时不加这条约束(self) -> None:
+        gateway = _Gateway("今天有 2 部新番在播。")
+        notifier, _ = _notifier(gateway)
+        await notifier.speak("星期二放送（共 2 部）：\n· 甲番\n· 乙番", UMO)
+        prompt = gateway.calls[0]["prompt"]
+        assert "素材只列出了一部分" not in prompt

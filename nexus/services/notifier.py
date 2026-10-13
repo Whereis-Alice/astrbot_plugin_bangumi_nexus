@@ -294,6 +294,10 @@ class Notifier:
             return fallback
         persona_prompt = await self._persona_prompt(umo)
         prompt = f"{conf.persona_instruction}\n\n通知内容：\n{facts}"
+        # 内容层面的硬约束，跟用户自定义的语气指令分开：素材被截断时模型最爱
+        # 顺手把首行的总数念成「这几部」，多出来的一句就堵这个洞。
+        if "只列出前" in facts:
+            prompt += "\n\n注意：素材只列出了一部分，请按实际列出的条数说，不要提总数。"
         attempts = 2 if llm_available(deps) else 1
         for attempt in range(1, attempts + 1):
             text = await llm_text(

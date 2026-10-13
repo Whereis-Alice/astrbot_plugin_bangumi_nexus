@@ -46,6 +46,7 @@ SECRET_KEYS: frozenset[str] = frozenset(
 DEFAULT_PERSONA_INSTRUCTION = (
     "请用你自己的口吻，简短自然地向大家转述下面这条番剧通知。"
     "保持信息准确，不要编造剧情，不要使用列表和标题，控制在两句话以内。"
+    "素材里若注明只列出前几部，就按实际列出的条数说，别提没列出的总数。"
 )
 
 

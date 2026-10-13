@@ -86,6 +86,80 @@ class Test主栏截断要说人话:
         assert default == TODAY_LIMIT
 
 
+class Test文字版与卡片同口径:
+    """人格念的是文字版，卡片画的是 HTML —— 两边漏一个数字都会变成「说九部只列七部」。"""
+
+    @staticmethod
+    def _bullets(text: str) -> int:
+        """按行首的「·」数条目，不能直接 count —— 行内的分隔符也是同一个字符。"""
+
+        return sum(1 for line in text.splitlines() if line.startswith("\u00b7"))
+
+    @staticmethod
+    def _day(count: int) -> CalendarDay:
+        items = tuple(
+            Subject(id=index, name=f"番 {index}", name_cn=f"番 {index}", score=9 - index * 0.01)
+            for index in range(1, count + 1)
+        )
+        return CalendarDay(weekday=1, label="周一", items=items)
+
+    def test_文字版只列展示上限并说明还有几部(self) -> None:
+        from nexus.services.search import _today_plain
+
+        text = _today_plain(self._day(20), 5)
+        assert text.startswith("周一放送（共 20 部）")
+        assert self._bullets(text) == 5
+        assert "还有 15 部" in text
+
+    def test_文字首行认的是截断前的总数(self) -> None:
+        """每日播报先按配置过滤再截断，首行必须说过滤后的总数而不是剩下几条。"""
+
+        from nexus.services.search import _today_plain
+
+        day = CalendarDay(weekday=1, label="周一", items=self._day(5).items)
+        text = _today_plain(day, 5, total=9)
+        assert text.startswith("周一放送（共 9 部）")
+        assert self._bullets(text) == 5
+        assert "还有 4 部" in text
+
+    def test_没截断时不写多余提示(self) -> None:
+        from nexus.services.search import _today_plain
+
+        text = _today_plain(self._day(5), 12)
+        assert "还有" not in text
+        assert self._bullets(text) == 5
+
+    def test_每日播报副标题写明展示上限(self) -> None:
+        from nexus.services.search import _today_subtitle
+
+        assert _today_subtitle(9, 7) == "共 9 部，展示前 7 部"
+        assert _today_subtitle(5, 12) == "共 5 部"
+
+
+class Test人格素材不切半句:
+    """素材切在半句上，模型会把没列出的条目补完，或者把总数念成已列条数。"""
+
+    def test_素材够短就原样返回(self) -> None:
+        from nexus.services.scheduler import _facts_of
+
+        text = "周一放送（共 2 部）：\n· 甲番 · 22:00 · 8分\n· 乙番 · 23:00 · 7分"
+        assert _facts_of(text) == text
+        assert "只列出前" not in _facts_of(text)
+
+    def test_超长素材整行截断并说明只列了几部(self) -> None:
+        from nexus.services.scheduler import _facts_of
+
+        lines = ["周二放送（共 20 部）："]
+        lines += [f"· 第 {index} 部动画名字很长长长长长长长长长长长长长 · 23:00 · 7.2分" for index in range(1, 10)]
+        facts = _facts_of("\n".join(lines))
+        assert facts.startswith("周二放送（共 20 部）：")
+        assert "只列出前" in facts
+        assert sum(1 for line in facts.splitlines() if line.startswith("\u00b7")) < 9
+        # 不能切在句子中间：末行要么是完整条目，要么是那句说明
+        tail = facts.splitlines()[-1]
+        assert tail.startswith(("\u00b7", "（素材到此为止"))
+
+
 class _FakeActivity:
     """只记下告警文本，方便断言降级路径真的被走到。"""
 

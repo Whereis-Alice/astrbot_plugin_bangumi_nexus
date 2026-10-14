@@ -150,7 +150,8 @@ class Test人格素材不切半句:
         from nexus.services.scheduler import _facts_of
 
         lines = ["周二放送（共 20 部）："]
-        lines += [f"· 第 {index} 部动画名字很长长长长长长长长长长长长长 · 23:00 · 7.2分" for index in range(1, 10)]
+        long_name = "动画名字长" * 30
+        lines += [f"· 第 {index} 部{long_name} · 23:00 · 7.2分" for index in range(1, 10)]
         facts = _facts_of("\n".join(lines))
         assert facts.startswith("周二放送（共 20 部）：")
         assert "只列出前" in facts
@@ -158,6 +159,17 @@ class Test人格素材不切半句:
         # 不能切在句子中间：末行要么是完整条目，要么是那句说明
         tail = facts.splitlines()[-1]
         assert tail.startswith(("\u00b7", "（素材到此为止"))
+
+    def test_卡片能列多少素材就喂多少(self) -> None:
+        """卡片主栏画 10 部，人格素材就必须有 10 条 —— 行数不能写死。"""
+
+        from nexus.services.scheduler import _facts_of
+
+        lines = ["周三放送（共 10 部）："]
+        lines += [f"· 第 {index} 部 · 22:00 · 6.0分" for index in range(1, 11)]
+        facts = _facts_of("\n".join(lines))
+        assert "只列出前" not in facts
+        assert sum(1 for line in facts.splitlines() if line.startswith("\u00b7")) == 10
 
 
 class _FakeActivity:

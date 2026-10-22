@@ -236,7 +236,8 @@ def parse_subject(raw: dict[str, Any]) -> Subject:
         air_date=str(raw.get("air_date") or raw.get("date") or "").strip(),
         air_weekday=int(raw.get("air_weekday") or 0),
         eps=eps,
-        total_episodes=int(raw.get("total_episodes") or eps),
+        # eps 是已录入的分集条数；总数未定时不能用它补齐，否则连载会被判完结。
+        total_episodes=int(raw.get("total_episodes") or 0),
         tags=select_tags(raw.get("tags") or raw.get("meta_tags")),
         collection={str(key): int(value or 0) for key, value in collection.items()}
         if isinstance(collection, dict)

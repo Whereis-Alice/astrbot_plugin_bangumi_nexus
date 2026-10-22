@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -396,6 +397,37 @@ class Test播报只播我追的番:
         await _watch(store, UMO_B, "甲番")
         reply = await SearchService(cast(Any, deps)).digest(UMO_A, weekday=3)
         assert reply.empty
+
+    async def test_条目ID相同即使译名完全不同也能播报(self, store: Store) -> None:
+        deps = _deps(store, NexusConfig(push_only_watchlist=True), days=_day("名探偵プリキュア！"))
+        await store.upsert_watch(WatchItem(id=0, umo=UMO_A, subject_id=1, title="名侦探光之美少女"))
+        reply = await SearchService(cast(Any, deps)).digest(UMO_A, weekday=3)
+        assert "名探偵プリキュア！" in reply.text
+
+    async def test_条目ID不同不因标题相似而播报另一季(self, store: Store) -> None:
+        deps = _deps(store, NexusConfig(push_only_watchlist=True), days=_day("某部番 第三季"))
+        await store.upsert_watch(WatchItem(id=0, umo=UMO_A, subject_id=2, title="某部番 第三季"))
+        reply = await SearchService(cast(Any, deps)).digest(UMO_A, weekday=3)
+        assert reply.empty
+
+
+@pytest.mark.parametrize("mode", ["manual", "automatic"])
+async def test_录入三集总数未定的番追到第四集不会被封顶(store: Store, mode: str) -> None:
+    show = _subject(name="仍在连载", name_cn="仍在连载", total_episodes=0, eps=3)
+    deps = _deps_search(store, show)
+    wl = _watchlist(deps)
+    if mode == "manual":
+        deps.matcher = SimpleNamespace(enrich=AsyncMock(return_value=SimpleNamespace()))
+        wl._added_card = AsyncMock(return_value=SimpleNamespace())
+        await wl.add(UMO_A, show.display_name)
+    else:
+        await ensure_watch(deps, wl, title=show.display_name, targets=(UMO_A,))
+    assert (await store.list_watch(UMO_A))[0].total == 0
+    assert (
+        await backfill_progress(deps, wl, title=show.display_name, episode=4, targets=(UMO_A,)) == 1
+    )
+    row = (await store.list_watch(UMO_A))[0]
+    assert (row.progress, row.total, row.status) == (4, 0, "watching")
 
 
 class Test认领关系不会插出重复行:

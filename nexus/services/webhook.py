@@ -328,7 +328,7 @@ class WebhookService:
         if subject is not None:
             # 模板里没写总集数就从条目上取 —— 卡片上那句「共 12 集」不该因为用户的
             # body 少填一个占位符就消失，回填时的连续编号判定也要靠它。
-            total = total or int(subject.total_episodes or subject.eps or 0)
+            total = total or int(subject.total_episodes or 0)
         if subject_id:
             # 季内集数：只给了连续编号（第三季的第 3 集写成 27）时，去分集表把它换回
             # 3。这一步只在编号明显超出总集数时才真的发请求，普通番剧零额外开销。

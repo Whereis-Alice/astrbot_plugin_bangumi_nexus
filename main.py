@@ -1533,7 +1533,7 @@ class BangumiNexusPlugin(Star):
             return f"Bangumi 上没搜到「{token}」。"
         lines = [
             f"- {subject.display_name} | 评分 {subject.score_label} | "
-            f"开播 {subject.air_date or '未定'} | {subject.eps or subject.total_episodes or '?'} 话 | "
+            f"开播 {subject.air_date or '未定'} | 总集数 {subject.total_episodes or '未定'} | "
             f"subject_id={subject.id}"
             for subject in subjects
         ]

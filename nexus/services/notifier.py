@@ -294,10 +294,14 @@ class Notifier:
             return fallback
         persona_prompt = await self._persona_prompt(umo)
         prompt = f"{conf.persona_instruction}\n\n通知内容：\n{facts}"
-        # 内容层面的硬约束，跟用户自定义的语气指令分开：素材被截断时模型最爱
-        # 顺手把首行的总数念成「这几部」，多出来的一句就堵这个洞。
+        if "放送（" in facts:
+            prompt += (
+                "\n\n播报要求：可以挑一两部自然介绍，不必逐部念完。"
+                "主栏与跨季续播分别计数，合计才是整个列表的数量。"
+                "提到部分条目时用「例如」「挑几部」，不能把举例条数说成当天总数。"
+            )
         if "只列出前" in facts:
-            prompt += "\n\n注意：素材只列出了一部分，请按实际列出的条数说，不要提总数。"
+            prompt += "\n\n注意：素材只列出了一部分，只作举例，不要据此推断全天数量。"
         attempts = 2 if llm_available(deps) else 1
         for attempt in range(1, attempts + 1):
             text = await llm_text(

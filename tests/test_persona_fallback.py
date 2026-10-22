@@ -327,10 +327,10 @@ class Test播报集数校验:
 
 
 class Test播报条数不给模型留空子:
-    """素材里写着「共 9 部」却只列 7 条时，模型必须按 7 条说，不能替总数打包票。"""
+    """概括部分条目时不能把举例条数说成全天总数。"""
 
-    async def test_素材被截断时提示模型只按列出的条数说(self) -> None:
-        gateway = _Gateway("今天有 7 部新番在播。")
+    async def test_素材被截断时提示模型明确只是举例(self) -> None:
+        gateway = _Gateway("今天挑两部聊聊，例如甲番和乙番。")
         notifier, _ = _notifier(gateway)
         facts = (
             "星期二放送（共 9 部）：\n"
@@ -339,10 +339,12 @@ class Test播报条数不给模型留空子:
             "（素材到此为止，这里只列出前 7 部）"
         )
         spoken = await notifier.speak(facts, UMO)
-        assert spoken == "今天有 7 部新番在播。"
+        assert spoken == "今天挑两部聊聊，例如甲番和乙番。"
         prompt = gateway.calls[0]["prompt"]
         assert "素材只列出了一部分" in prompt
         assert "素材到此为止，这里只列出前 7 部" in prompt
+        assert "不能把举例条数说成当天总数" in prompt
+        assert "请按实际列出的条数说" not in prompt
 
     async def test_素材完整时不加这条约束(self) -> None:
         gateway = _Gateway("今天有 2 部新番在播。")

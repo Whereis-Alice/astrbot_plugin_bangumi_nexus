@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 
 from ..constants import WEEKDAY_CN
 from ..links import link_caption
-from ..models import CalendarDay, MatchResult, Subject
+from ..models import CalendarDay, MatchResult, Subject, WatchItem
 from ..render import (
     build_calendar_card,
     build_episode_card,
@@ -169,30 +169,31 @@ async def _current_airings(
     return CalendarDay(weekday=day.weekday, label=day.label, items=items), extras
 
 
-async def _watched_titles(deps: Deps, umo: str) -> tuple[str, ...]:
-    """这个会话追番表里还在追的标题，用于「播报只播我追的番」。
+async def _watched_items(deps: Deps, umo: str) -> tuple[WatchItem, ...]:
+    """保留条目 ID，避免不同译名漏推、同系列不同季串台；弃坑条目不参与。
 
-    「已抛弃」 的条目不算 —— 用户明确弃了还往群里刷，比不过滤更烦人。
-    读表失败时返回空元组，调用方会据此放弃过滤（宁可多播，不要因为一次
-    数据库抖动就整条播报静默）。
+    读取失败时跳过本轮，不发送用户未订阅的全量列表。
     """
 
     try:
         items = await deps.store.list_watch(umo)
-    except Exception as error:  # noqa: BLE001 - 过滤是增强项，读表失败就退回不过滤
-        deps.activity.warn("push", f"读取追番表失败，本轮不过滤：{error}")
+    except Exception as error:  # noqa: BLE001 - 读表失败不能绕过用户选择的过滤
+        deps.activity.warn("push", f"读取追番表失败，跳过本轮播报：{error}")
         return ()
-    return tuple(item.title for item in items if item.status != "dropped" and item.title)
+    return tuple(item for item in items if item.status != "dropped" and item.title)
 
 
-def _in_watchlist(subject: Subject, titles: Sequence[str]) -> bool:
-    """条目是否命中追番表。中日双名都比一遍，取最高相似度。"""
+def _in_watchlist(subject: Subject, items: Sequence[WatchItem]) -> bool:
+    """双方都有 Bangumi ID 时按 ID 匹配；旧记录缺 ID 时才退回中日双名。"""
 
     names = [name for name in (subject.name_cn, subject.name) if name]
-    for name in names:
-        for wanted in titles:
-            if similarity(name, wanted) >= MATCH_THRESHOLD:
+    for item in items:
+        if subject.id and item.subject_id:
+            if subject.id == item.subject_id:
                 return True
+            continue
+        if any(similarity(name, item.title) >= MATCH_THRESHOLD for name in names):
+            return True
     return False
 
 
@@ -421,6 +422,16 @@ class SearchService:
         days = await deps.hub.bangumi.calendar()
         if not days:
             return Reply.plain("Bangumi 日历接口暂时没给数据，稍后再试。")
+        checker = AiringFilter(deps)
+        allowed = {
+            item.id for item in await checker.filter([item for day in days for item in day.items])
+        }
+        days = [
+            CalendarDay(
+                day.weekday, day.label, tuple(item for item in day.items if item.id in allowed)
+            )
+            for day in days
+        ]
         theme, _ = await style_for(deps, umo)
         html = build_calendar_card(
             theme,
@@ -508,9 +519,9 @@ class SearchService:
         ]
         # 「只播我追的番」 放在评分/在看人数之后：两层是「与」关系，
         # 而追番表通常只有十来部，先做便宜的数值过滤能少算一堆相似度。
-        wanted: tuple[str, ...] = ()
+        wanted: tuple[WatchItem, ...] = ()
         if conf.push_only_watchlist:
-            wanted = await _watched_titles(deps, umo)
+            wanted = await _watched_items(deps, umo)
             if not wanted:
                 return Reply()
             picked = [item for item in picked if _in_watchlist(item, wanted)]
@@ -821,6 +832,11 @@ def _today_plain(
     total_shown = len(day.items) if total is None else total
     omitted = max(0, total_shown - min(len(day.items), limit))
     lines = [f"{day.label}放送（共 {total_shown} 部）："]
+    if extras:
+        lines[0] = (
+            f"{day.label}放送（主栏共 {total_shown} 部，跨季续播 {len(extras)} 部，"
+            f"合计 {total_shown + len(extras)} 部）："
+        )
     for item in day.items[:limit]:
         lines.append("· " + _today_line(item, clock.get(item.id, "")))
     if omitted:

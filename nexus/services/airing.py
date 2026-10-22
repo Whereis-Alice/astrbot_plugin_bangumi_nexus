@@ -56,7 +56,7 @@ def metadata_status(
         start = begin.astimezone(JST).date() if begin else None
     if start and start > today:
         return "upcoming"
-    if subject.platform.lower() in {"剧场版", "movie", "ova", "oad"}:
+    if subject.platform.lower() in {"剧场版", "劇場版", "movie", "映画", "ova", "oad"}:
         return "excluded"
     end = next(
         (day for key in END_FIELDS if (day := exact_date(subject.infobox.get(key, "")))), None
@@ -90,6 +90,18 @@ def episode_status(
     }
     if total > 0 and all(number in numbered for number in range(1, total + 1)):
         return "ended"
+    # 单集 WEB 电影也会进入星期表，唯一正片缺日期时，首播日就是它的放送日。
+    # 只信明确的总集数 1，不能把「目前只录入一集」的周播番当单集作品。
+    if total == 1:
+        start = exact_date(subject.air_date)
+        if start is None and item:
+            begin = parse_datetime(item.begin)
+            start = begin.astimezone(JST).date() if begin else None
+        if start:
+            start = _broadcast_date(start, item)
+            if start > today:
+                return "upcoming"
+            return "ended" if start < today else "airing"
     # 上周播过不代表本周还播：缺少未来分集和结束日期时，补充栏应等待资料确认。
     return "unknown"
 
@@ -153,8 +165,12 @@ class AiringFilter:
             detailed = None
         if isinstance(detailed, Subject):
             subject = detailed
-        state = metadata_status(subject, item, self._today)
+        state = metadata_status(subject, item, self._today, include_data_end=False)
         if state != "unknown":
             return state
-        episodes = await self._deps.hub.bangumi.episodes(subject.id, limit=200)
-        return episode_status(subject, episodes, item, self._today)
+        try:
+            episodes = await self._deps.hub.bangumi.episodes(subject.id, limit=200)
+        except Exception:  # noqa: BLE001 - 分集不可用仍可使用补充源的结束日期
+            episodes = ()
+        state = episode_status(subject, episodes, item, self._today)
+        return state if state != "unknown" else metadata_status(subject, item, self._today)

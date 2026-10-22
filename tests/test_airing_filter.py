@@ -17,6 +17,7 @@ from nexus.models import CalendarDay, DataItem, Episode, Subject
 from nexus.services import airing
 from nexus.services.airing import AiringFilter, episode_status, metadata_status
 from nexus.services.search import SearchService, _long_running
+from nexus.sources.bangumi import parse_subject
 from nexus.sources.bangumi_data import MONTH_CACHE_SECONDS, BangumiDataSource
 from nexus.titles import JST, parse_broadcast
 
@@ -136,6 +137,74 @@ async def test_主日历和补充栏均排除完结条目() -> None:
     checker = AiringFilter(deps, now=NOW)
     assert await checker.filter([ended, running]) == (running,)
     assert await checker.filter([ended, running], supplemental=True) == (running,)
+
+
+@pytest.mark.parametrize(
+    "day, expected",
+    [(date(2026, 9, 30), "upcoming"), (date(2026, 10, 1), "airing"), (TODAY, "ended")],
+)
+async def test_WEB单集作品没有分集日期也只在首播当天保留(day: date, expected: str) -> None:
+    # Bangumi 577237 的真实字段：WEB、总集数 1、首播 10/1，唯一正片日期为空。
+    movie = parse_subject(
+        {
+            "id": 577237,
+            "name": "仙逆剧场版 弑仙之战",
+            "platform": "WEB",
+            "date": "2026-10-01",
+            "eps": 1,
+            "total_episodes": 1,
+        }
+    )
+    deps = deps_for([movie], {movie.id: [Episode(id=1747754, sort=1, ep=1)]})
+    assert (
+        await AiringFilter(deps, now=datetime.combine(day, NOW.timetz()))._status(movie) == expected
+    )
+
+
+def test_单集的明确分集日期优先于首播日期() -> None:
+    movie = subject(air_date="2026-09-01", total_episodes=1)
+    assert (
+        episode_status(movie, [Episode(id=1, sort=1, ep=1, airdate="2026-10-02")], None, TODAY)
+        == "airing"
+    )
+
+
+def test_单集缺少精确首播日期不猜完结() -> None:
+    movie = subject(air_date="2026-10", total_episodes=1)
+    assert episode_status(movie, [Episode(id=1, sort=1, ep=1)], None, TODAY) == "unknown"
+
+
+@pytest.mark.parametrize("total", [None, 0, 24])
+def test_从接口解析到核验都不能把录入条数当总集数(total: int | None) -> None:
+    raw = {"id": 1, "name": "仍在连载", "eps": 3}
+    if total is not None:
+        raw["total_episodes"] = total
+    item = parse_subject(raw)
+    assert item.total_episodes == (total or 0)
+    assert episode_status(item, episodes(3, date(2026, 9, 25)), None, TODAY) == "unknown"
+
+
+async def test_完整末集证据优先于补充源过时的未来结束日期() -> None:
+    item = subject(total_episodes=12)
+    deps = deps_for([item], {item.id: episodes(12, date(2026, 9, 25))})
+    deps.hub.bangumi_data.cached_by_bangumi_id = lambda sid: data_item(end="2026-12-31")
+    assert await AiringFilter(deps, now=NOW).filter([item], supplemental=True) == ()
+
+
+@pytest.mark.parametrize("method", ["today", "digest", "calendar"])
+async def test_今日播报和周历都不重复列出播完的单集作品(method: str) -> None:
+    movie = subject(
+        1, name_cn="仙逆剧场版 弑仙之战", air_date="2026-10-01", total_episodes=1, platform="WEB"
+    )
+    live = subject(2, total_episodes=51)
+    deps = deps_for(
+        [movie, live], {1: [Episode(id=1, sort=1, ep=1)], 2: episodes(51, date(2027, 1, 24))}
+    )
+    kwargs = {} if method == "calendar" else {"weekday": 5}
+    reply = await getattr(SearchService(deps), method)("group", **kwargs)
+    assert live.name in reply.text
+    assert movie.display_name not in reply.text
+    assert movie.display_name not in reply.card.html
 
 
 async def test_接口失败主栏保留候选补充栏不凭空确认() -> None:

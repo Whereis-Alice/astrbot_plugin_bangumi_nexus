@@ -415,6 +415,21 @@ class _S3Bangumi:
         return _s3_episodes(with_ep=self._with_ep)
 
 
+async def test_总集数未定的Webhook不会因已录入集数阻止第四集回填() -> None:
+    bgm = _S3Bangumi(eps=0)
+
+    async def lookup(sid: int) -> Subject:
+        return Subject(id=sid, name="正在连载", eps=3, total_episodes=0)
+
+    bgm.subject = lookup
+    note = await _service(NexusConfig(enable_cross_match=False), bangumi=bgm).build(
+        {"event": "下载完成", "title": "正在连载", "episode": "4", "subject_id": "1"}
+    )
+    assert note.payload["total_episodes"] == 0
+    assert note.payload["event_episode"] == 4
+    assert bgm.episode_calls == 0
+
+
 class Test分集表反查:
     """「inner_episode」：拿字幕组的连续编号去 Bangumi 分集表里换季内集数。"""
 

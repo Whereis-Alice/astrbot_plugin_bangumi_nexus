@@ -146,19 +146,39 @@ class Test人格素材不切半句:
         assert _facts_of(text) == text
         assert "只列出前" not in _facts_of(text)
 
-    def test_超长素材整行截断并说明只列了几部(self) -> None:
+    def test_长番名和放送时间不会使主栏或跨季条目丢失(self) -> None:
         from nexus.services.scheduler import _facts_of
+        from nexus.services.search import _today_plain
 
-        lines = ["周二放送（共 20 部）："]
-        long_name = "动画名字长" * 30
-        lines += [f"· 第 {index} 部{long_name} · 23:00 · 7.2分" for index in range(1, 10)]
-        facts = _facts_of("\n".join(lines))
-        assert facts.startswith("周二放送（共 20 部）：")
-        assert "只列出前" in facts
-        assert sum(1 for line in facts.splitlines() if line.startswith("\u00b7")) < 9
-        # 不能切在句子中间：末行要么是完整条目，要么是那句说明
-        tail = facts.splitlines()[-1]
-        assert tail.startswith(("\u00b7", "（素材到此为止"))
+        titles = [
+            "乱世千金倪亚‧利斯顿转生为娇弱千金的弑神武人华丽无双录",
+            "被放逐的作弊赋予魔术师随心所欲的第二人生",
+            "超超超超超喜欢你的100个女朋友 第三季",
+            "转生就是剑 第二季",
+            "魔法骑士雷阿斯 二〇二六版",
+            "世界最强的魔女就此开始",
+            "佐佐木与文鸟小哔 第二季",
+            "侦探已经死了 第二季",
+            "归还者的魔法要特别 第二季",
+            "兽王武神丹帝拜恩",
+        ]
+        day = CalendarDay(
+            3, "星期三", tuple(Subject(id=i, name=name, score=6.5) for i, name in enumerate(titles))
+        )
+        continuing = Subject(id=20, name="新网球王子 U-17 世界杯 决赛成员选拔赛")
+        text = _today_plain(
+            day,
+            10,
+            extras=((continuing, "深夜 01:30"),),
+            times=dict.fromkeys(range(10), "深夜 23:45"),
+        )
+        assert len(text) > 420
+        facts = _facts_of(text)
+        assert "主栏共 10 部，跨季续播 1 部，合计 11 部" in facts
+        assert sum(line.startswith("·") for line in facts.splitlines()) == 11
+        for name in [*titles, continuing.name]:
+            assert name in facts
+        assert "23:45" in facts and "深夜 01:30" in facts
 
     def test_卡片能列多少素材就喂多少(self) -> None:
         """卡片主栏画 10 部，人格素材就必须有 10 条 —— 行数不能写死。"""

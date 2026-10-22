@@ -368,33 +368,14 @@ class Scheduler:
         return best.strftime("%H:%M") if same_day else best.strftime("明天 %H:%M")
 
 
-def _facts_of(text: str, *, limit: int = 420) -> str:
-    """从播报纯文本里截一段当人格口播的素材。
+def _facts_of(text: str) -> str:
+    """保留卡片展示的完整事实；条目数已有展示上限，不再按字符二次删番。
 
-    素材的条目上限必须跟着卡片主栏走，所以这里不再写死行数：文本本身已经是
-    按展示上限截好的（「_today_plain」 只列卡片画得出的那几部），再砍一刀只会
-    让口播的条数跟卡片对不上 —— 用户抓到的「说九部只列七部」「卡片十部口播
-    七部」都是这里写死八行造成的。字符上限只作为成本护栏，真撞上时也整行丢，
-    绝不切在半句上，并补一句「只列出前几部」，不让模型把总数念成已列条数。
+    长番名与放送时间很容易超过 420 字，二次截断会让跨季栏和后几部完全消失。
+    人格输出长度仍由 persona_max_chars 控制。
     """
 
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return ""
-    picked: list[str] = []
-    used = 0
-    truncated = False
-    for index, line in enumerate(lines):
-        # 首行（标题）永远保留；之后装不下的整行直接丢，绝不切在句子中间。
-        if index and used + len(line) > limit:
-            truncated = True
-            break
-        used += len(line)
-        picked.append(line)
-    if not truncated:
-        return "\n".join(picked)
-    shown = sum(1 for line in picked if line.startswith("\u00b7"))
-    return "\n".join([*picked, f"（素材到此为止，这里只列出前 {shown} 部）"])
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip())
 
 
 __all__ = ["MISFIRE_GRACE_SECONDS", "Scheduler"]
